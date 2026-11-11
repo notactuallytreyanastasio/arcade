@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f3f2ea" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1b2a22" media="(prefers-color-scheme: dark)">
+<title>arcade: a game engine for March games in the browser</title>
+<meta name="description" content="arcade is a game engine for March games that run in the browser: a pure core, a thin JS shell, and a mini-golf game built on it that you can play here.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="arcade: a game engine for March games in the browser">
+<meta property="og:description" content="A pure core, a thin JS shell, and a mini-golf game built on it that plays in the page.">
+<meta property="og:url" content="https://notactuallytreyanastasio.github.io/arcade/">
+<meta property="og:image" content="https://notactuallytreyanastasio.github.io/arcade/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%233f9b4a'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%23101010'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <a class="mark" href="./">arcade</a>
+  <nav aria-label="On this page">
+    <a href="putt/">Demo</a>
+    <a href="#packages">Packages</a>
+    <a href="#plug-in">Plugging in</a>
+    <a href="https://github.com/notactuallytreyanastasio/arcade">GitHub</a>
+  </nav>
+</header>
+
+<main>
+
+<section class="hero">
+  <div class="pitch">
+    <p class="label">arcade 0.1.0 &middot; MIT</p>
+    <h1>A game engine for March games that run in the browser.</h1>
+    <p class="lede">The core is pure: maths, a seedable RNG, a camera, a 2D drawing
+    vocabulary, a synth, and the replay of a game's reducer. A thin JS-only shell runs
+    the frame loop, canvas, pointer and audio. A game supplies the rules, the scene and
+    the sounds; the engine never looks inside a game's model, messages or effects.</p>
+    <p class="actions">
+      <a class="button" href="putt/">Play the demo</a>
+      <a class="quiet" href="https://github.com/notactuallytreyanastasio/arcade">Source on GitHub</a>
+    </p>
+  </div>
+  <figure class="demo">
+    <a href="putt/" aria-label="Play Putt, the example game">
+      <!-- A screenshot of putt/ as built; retaken by `scripts/pages.sh shot`. -->
+      <img src="putt.png" width="780" height="1688" alt="Putt in a phone-sized window: a mini-golf green on a dark page.">
+      <span class="play">Play Putt</span>
+    </a>
+    <figcaption>Putt, the engine's example game: top-down mini-golf, built from
+    <a href="https://github.com/notactuallytreyanastasio/arcade/tree/main/examples/putt"><code>examples/putt</code></a>.
+    It is the page behind this picture, and it takes touch or a mouse.</figcaption>
+  </figure>
+</section>
+
+<section class="facts" aria-label="What the engine is">
+  <div>
+    <h2>Pure core</h2>
+    <p>Every fn in the core is <code>cap pure</code> with <code>needs ()</code>. Hooks
+    are plain fn parameters and extension points are type parameters, so a game's cue,
+    event and model types pass through the engine unopened.</p>
+  </div>
+  <div>
+    <h2>Thin shell</h2>
+    <p><code>Arcade.Web.*</code> and its <code>arcade_*.mjs</code> glue are the only
+    JS-target code. The shell executes a list of canvas calls and decides nothing; every
+    drawing decision is made in the core, where it is testable.</p>
+  </div>
+  <div>
+    <h2>Reproducible</h2>
+    <p>The same seed and the same actions give the same state bit for bit, natively and
+    on JS, unless the computation goes through libm, where V8 and the native libm can
+    differ by an ulp or two. <a href="#limits">The limits are listed below.</a></p>
+  </div>
+</section>
+
+<section id="packages">
+  <h2>Three packages</h2>
+  <p class="intro">Versioned together at 0.1.0 and published separately. The engine
+  names no game; dependencies point one way.</p>
+
+  <div class="packages">
+    <article>
+      <h3><code>arcade</code></h3>
+      <p class="kind">lib</p>
+      <p>The pure core and, under <code>lib/arcade/web/</code>, the JS shell.</p>
+      <ul class="modules">
+        <li><code>Arcade.Rng</code> SplitMix64 as a value: every draw returns <code>(value, Rng)</code></li>
+        <li><code>Arcade.Camera</code> perspective or orthographic; world to screen, rays</li>
+        <li><code>Arcade.Draw</code>, <code>Arcade.Canvas</code>, <code>Arcade.Svg</code> draw ops as data, compiled to canvas calls or SVG</li>
+        <li><code>Arcade.Synth</code>, <code>Arcade.SynthFeed</code> a polyphonic synth as a value, fed by a game's own cue type</li>
+        <li><code>Arcade.Replay</code> a game's reducer folded over its actions</li>
+        <li><code>Arcade.Vec2</code>, <code>Vec3</code>, <code>Num</code>, <code>Numerics</code>, <code>U64</code>, <code>Float32</code>, <code>Html</code></li>
+        <li><code>Arcade.Web.Runtime</code>, <code>Input</code>, <code>Paint</code>, <code>Audio</code>, <code>SynthHost</code>, <code>SynthWorklet</code> and the rest of the shell</li>
+      </ul>
+    </article>
+    <article>
+      <h3><code>arcade_physics</code></h3>
+      <p class="kind">lib &middot; depends on <code>arcade</code></p>
+      <p>Fixed-step simulation, kinematics, the libm replay seam and gesture
+      measurement. Pure.</p>
+      <ul class="modules">
+        <li><code>Arcade.Physics.Sim</code> a clock, timed events, sampled paths and the step loop <code>run_steps</code></li>
+        <li><code>Arcade.Physics.Kinematics</code> ballistic motion, friction, reflection, bounds</li>
+        <li><code>Arcade.Physics.Trig</code> recorded sines in place of libm, for bit-exact replays across targets</li>
+        <li><code>Arcade.Physics.Gesture</code> a flick measured from pointer samples</li>
+      </ul>
+    </article>
+    <article>
+      <h3><code>arcade_testkit</code></h3>
+      <p class="kind">lib &middot; depends on <code>arcade</code> &middot; a dev-dep</p>
+      <p>The suite harness, golden-row readers and digests. It holds IO and panics, so
+      it goes on test paths only.</p>
+      <ul class="modules">
+        <li><code>Arcade.Test.Harness</code> cases and outcomes; a suite passes only when it prints <code>HARNESS PASS</code> with non-zero counts</li>
+        <li><code>Arcade.Test.GoldenIo</code> golden rows as tokens; floats compared on every bit, or within a declared ulp tolerance for libm on JS</li>
+        <li><code>Arcade.Test.Digest</code> a 32-bit digest of a run, so two targets can be compared by one number</li>
+      </ul>
+    </article>
+  </div>
+
+  <h3 class="sub">The dependency lines</h3>
+  <p>The packages are not in the forge registry yet. Once 0.1.0 is published, a game's
+  <code>forge.toml</code> names them by version:</p>
+<pre><code>[deps]
+arcade = "0.1.0"
+arcade_physics = "0.1.0"      # only if it uses Arcade.Physics
+
+[dev-deps]
+arcade_testkit = "0.1.0"</code></pre>
+  <p>Until then, and for a game that lives in the engine's source tree as the example
+  does, by path:</p>
+<pre><code>[deps]
+arcade = { path = "../.." }
+arcade_physics = { path = "../../physics" }
+
+[dev-deps]
+arcade_testkit = { path = "../../testkit" }</code></pre>
+</section>
+
+<section id="plug-in">
+  <h2>How a game plugs in</h2>
+  <p class="intro">The game's side, as <code>examples/putt</code> does it.</p>
+  <ol class="steps">
+    <li><strong>Rules</strong> are a pure reducer,
+      <code>play(rules, action, state) : Result(state, why)</code>. Every random choice
+      is drawn from an <code>Arcade.Rng</code> carried in the state, so
+      <code>Arcade.Replay.replay</code> rebuilds any game from its seed and its actions.</li>
+    <li><strong>Simulation</strong> steps with
+      <code>Arcade.Physics.Sim.run_steps</code> and the helpers in
+      <code>Kinematics</code>.</li>
+    <li><strong>The view</strong> builds a <code>Rig</code> (<code>Perspective</code> for
+      a 3D scene, <code>Orthographic</code> for a top-down one), projects with
+      <code>Arcade.Camera</code>, and returns a <code>List(DrawOp)</code>.</li>
+    <li><strong>Sound</strong> is the game's own cue type and a
+      <code>voices(SynthConsts, cue)</code> fn. The game emits
+      <code>AudioCmd(cue)</code> values; the engine's feed and worklet render them.</li>
+    <li><strong>The shell</strong> is one <code>WebHooks</code> record handed to
+      <code>Arcade.Web.Runtime.launch</code>: boot, update, perform, the tick, resize,
+      pointer and visibility msgs, the scene, an overlay and the <code>data-*</code>
+      marks.</li>
+  </ol>
+
+  <h3 class="sub">The whole of step 5 in the demo</h3>
+  <p>This is the end of
+  <a href="https://github.com/notactuallytreyanastasio/arcade/blob/main/examples/putt/shell/putt_shell.march"><code>examples/putt/shell/putt_shell.march</code></a>,
+  copied into this page when the site was built. <code>"green"</code> is the id of the
+  page's canvas; everything the hooks call is the game's own code.</p>
+<pre><code><!-- snippet:shell -->fn hooks() : Arcade.Web.Runtime.WebHooks(Held, PuttMsg, PuttFx) do
+  {
+    hook_num: Arcade.Numerics.make(),
+    hook_boot: fn (w, h, seed) -&gt; boot(w, h, seed),
+    hook_update: fn (b, x) -&gt; held(update(unheld(b), x)),
+    hook_perform: fn (_dispatch, effects) -&gt; perform(effects),
+    hook_tick: fn t -&gt; PmTick(t),
+    hook_resize: fn (w, h) -&gt; PmResize(w, h),
+    hook_down: fn raw -&gt; Some(PmDown(track(raw))),
+    hook_move: fn raw -&gt; Some(PmMove(track(raw))),
+    hook_up: fn raw -&gt; Some(PmUp(track(raw))),
+    hook_cancel: Some(PmCancel),
+    hook_listen: fn (_model, _dispatch) -&gt; (),
+    hook_visible: fn shown -&gt; PmVisible(shown),
+    hook_scene: fn b -&gt; scene(unheld(b)),
+    hook_overlay: fn _ -&gt; [],
+    hook_settle: fn _ -&gt; (),
+    hook_marks: fn b -&gt; marks(unheld(b))
+  }
+end
+
+fn main(_f : Cap(IO.Foreign)) : () do
+  match Arcade.Web.Runtime.launch("green", fn () -&gt; hooks()) do
+  Ok(_) -&gt; ()
+  Err(why) -&gt; panic(why)
+  end
+end<!-- /snippet:shell --></code></pre>
+
+  <h3 class="sub">Building it</h3>
+  <p>The game's Makefile includes <code>arcade.mk</code>, which defines the module paths
+  and the JS flags. <code>forge build</code> puts only <code>lib/</code> and the deps on
+  the module path, so a shell in <code>shell/</code> is built with <code>march</code>
+  directly:</p>
+<pre><code>ARCADE := ../..
+include $(ARCADE)/arcade.mk
+WEB_LIB := lib:$(ARCADE_LIB):$(ARCADE_PHYSICS_LIB):shell
+web:
+	MARCH_LIB_PATH=$(WEB_LIB) march $(ARCADE_JS_FLAGS) -o dist/game.mjs shell/game_shell.march</code></pre>
+  <p><code>arcade.mk</code>, <code>scripts/</code> and <code>examples/</code> belong to
+  the source tree and are not published with the packages.</p>
+</section>
+
+<section id="demo" class="band">
+  <div>
+    <h2>The demo is that build</h2>
+    <p>Putt is a static site: <code>putt.mjs</code> built from the shell above, the
+    audio worklet's own build, March's runtime modules and the engine's glue. Every
+    random choice in it is drawn from an <code>Arcade.Rng</code> seeded at launch, so a
+    game is its seed plus the actions it accepted, and
+    <code>Arcade.Replay.replay</code> rebuilds it.</p>
+  </div>
+  <p class="actions">
+    <a class="button" href="putt/">Play the demo</a>
+    <a class="quiet" href="https://github.com/notactuallytreyanastasio/arcade/tree/main/examples/putt">Read its source</a>
+  </p>
+</section>
+
+<section id="limits">
+  <h2>Where bit-exact stops</h2>
+  <ul class="limits">
+    <li><strong>libm on JS.</strong> sin, cos, log and atan2 differ from native on a few
+      percent of arguments by 1 ulp (<code>next_gaussian</code>, which chains them, by up
+      to 2). Physics that must replay across targets goes through
+      <code>Arcade.Physics.Trig</code>.</li>
+    <li><strong>Float32.</strong> <code>sinf</code>, <code>expf</code> and
+      <code>powf</code> are double libm rounded to Float, not a Float libm, so they can
+      differ from a platform's <code>sinf</code> by one Float ulp.</li>
+    <li><strong>Float literals on JS</strong> print with 12 significant digits, so a
+      constant with more comes from <code>Arcade.Numerics</code>, built from text.</li>
+    <li><strong>Int on JS</strong> is a double, exact to 2<sup>53</sup> &minus; 1.
+      Anything wider is <code>Arcade.U64</code>.</li>
+    <li><strong>The shell is JS only.</strong> <code>Arcade.Web.*</code> builds for the
+      JS target and draws on a canvas. The pure core also runs natively, which is how
+      its suites are checked on both targets.</li>
+  </ul>
+</section>
+
+</main>
+
+<footer>
+  <p><a href="https://github.com/notactuallytreyanastasio/arcade">github.com/notactuallytreyanastasio/arcade</a>
+  &middot; <a href="https://github.com/notactuallytreyanastasio/arcade/blob/main/README.md">README</a>
+  &middot; <a href="https://github.com/notactuallytreyanastasio/arcade/blob/main/CHANGELOG.md">Changelog</a>
+  &middot; <a href="https://github.com/notactuallytreyanastasio/arcade/blob/main/LICENSE">MIT license</a></p>
+  <p>This page is plain HTML and CSS and makes no requests to any other site.</p>
+</footer>
+
+</body>
+</html>

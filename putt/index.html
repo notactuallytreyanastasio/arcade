@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- viewport-fit=cover: the page reaches under a notch, and style.css pads
+     the DOM strip with the safe-area insets. Zoom is refused twice, here and
+     by touch-action in style.css (iOS ignores user-scalable). -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#1b2a22">
+<meta name="color-scheme" content="dark">
+<title>Putt: mini-golf on the arcade engine</title>
+<meta name="description" content="Putt, a top-down mini-golf game: the example game of arcade, a game engine for March games that run in the browser.">
+<!-- The card's URL must be absolute, so it names where scripts/pages.sh
+     deploys the site; the image is site/card.png in the engine's tree. -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="Putt: mini-golf on the arcade engine">
+<meta property="og:description" content="A top-down mini-golf game, the example game of arcade, a game engine for March games that run in the browser.">
+<meta property="og:url" content="https://notactuallytreyanastasio.github.io/arcade/putt/">
+<meta property="og:image" content="https://notactuallytreyanastasio.github.io/arcade/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%233f9b4a'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%23101010'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<!-- The green (Putt.View, painted by Arcade.Web.Paint). The shell
+     (shell/putt_shell.march, through Arcade.Web.Runtime) finds it by id,
+     sizes it to the window and takes its pointer events. -->
+<canvas id="green"></canvas>
+<!-- The page's own strip, laid over the bottom edge of the canvas. Only the
+     two links take touches; the game does not know it is there. Every URL is
+     relative, so the page works from any path (the worklet is loaded
+     relative to the page too). -->
+<nav id="chrome" aria-label="About this page">
+  <a href="../" title="The arcade engine">arcade</a>
+  <h1>Putt</h1>
+  <a href="https://github.com/notactuallytreyanastasio/arcade/tree/main/examples/putt">source</a>
+</nav>
+<noscript><p id="noscript">Putt is drawn by JavaScript on a canvas; it needs JavaScript turned on.</p></noscript>
+<script type="module" src="putt.mjs"></script>
+</body>
+</html>
