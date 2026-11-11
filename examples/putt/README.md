@@ -7,7 +7,7 @@ it, and a wind on every hole drawn from the game's seed. It uses only
 `Arcade.*` modules; nothing in it knows about any other game.
 
 ```
-forge.toml              app; [deps] arcade, arcade_physics by path; [dev-deps] arcade_testkit
+forge.toml              app; [deps] arcade, arcade-physics by path; [dev-deps] arcade-testkit
 lib/putt/course.march   Putt.Course: the nine holes (walls, blocks, sand, water, slopes, gust, tee, cup, par)
 lib/putt/roll.march     Putt.Roll: one putt rolled out (Arcade.Physics.Sim + Kinematics)
 lib/putt/rules.march    Putt.Rules: state, actions, play/apply, resume (Arcade.Replay)

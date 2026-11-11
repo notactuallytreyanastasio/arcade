@@ -9,7 +9,7 @@ license = "MIT"
 
 [deps]
 arcade = { path = "../.." }
-arcade_physics = { path = "../../physics" }
+arcade-physics = { path = "../../physics" }
 
 [dev-deps]
-arcade_testkit = { path = "../../testkit" }
+arcade-testkit = { path = "../../testkit" }

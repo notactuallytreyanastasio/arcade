@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `arcade_testkit` are recorded here. Versions follow
+All notable changes to `arcade-testkit` are recorded here. Versions follow
 semver; `forge publish --old-source` checks the bump against the public API
 surface.
 

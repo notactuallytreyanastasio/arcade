@@ -2,8 +2,8 @@
 # Stage the three engine packages as they would be published, one directory
 # each under OUT:
 #   OUT/arcade          the core and the web shell
-#   OUT/arcade_physics  Arcade.Physics.*
-#   OUT/arcade_testkit  Arcade.Test.*
+#   OUT/arcade-physics  Arcade.Physics.*
+#   OUT/arcade-testkit  Arcade.Test.*
 #
 #   scripts/package.sh OUT
 #
@@ -62,6 +62,12 @@ stage() {
   [ -f "$dest/forge.toml" ] || die "$name: no forge.toml staged"
   staged_name=$(sed -n 's/^name = "\([^"]*\)"$/\1/p' "$dest/forge.toml" | head -n 1)
   [ "$staged_name" = "$name" ] || die "$name: forge.toml names '$staged_name'"
+  # forgepm.org answers `400 invalid_name` to a name with an underscore, and
+  # `forge publish --dry-run` does not check the name. The names the registry
+  # holds are lower-case words joined by hyphens.
+  case "$name" in
+    *[!a-z0-9-]*|-*|*-) die "$name: the registry refuses this name (lower-case letters, digits and inner hyphens only)" ;;
+  esac
 }
 
 # to_registry NAME: the core dep in OUT/NAME/forge.toml, dev form to registry
@@ -83,13 +89,13 @@ to_registry() {
 
 stage arcade "$root" \
   forge.toml forge.caps.lock LICENSE README.md CHANGELOG.md .march-lint.toml .editorconfig lib
-stage arcade_physics "$root/physics" \
+stage arcade-physics "$root/physics" \
   forge.toml forge.caps.lock LICENSE README.md CHANGELOG.md lib
-stage arcade_testkit "$root/testkit" \
+stage arcade-testkit "$root/testkit" \
   forge.toml forge.caps.lock LICENSE README.md CHANGELOG.md .march-lint.toml lib
-to_registry arcade_physics
-to_registry arcade_testkit
+to_registry arcade-physics
+to_registry arcade-testkit
 
-for name in arcade arcade_physics arcade_testkit; do
+for name in arcade arcade-physics arcade-testkit; do
   echo "staged $name $(version_of "$out/$name/forge.toml"): $(find "$out/$name" -type f | wc -l | tr -d ' ') files in $out/$name"
 done

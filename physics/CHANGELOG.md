@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `arcade_physics` are recorded here. Versions follow
+All notable changes to `arcade-physics` are recorded here. Versions follow
 semver; `forge publish --old-source` checks the bump against the public API
 surface.
 

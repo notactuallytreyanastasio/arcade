@@ -20,8 +20,8 @@ pin those semantics.
 | forge name | Path | Type | Holds |
 |---|---|---|---|
 | `arcade` | `.` (`lib/arcade/`) | lib | the pure core and, under `lib/arcade/web/`, the JS shell |
-| `arcade_physics` | `physics/` (`lib/arcade/physics/`) | lib, depends on `arcade` | fixed-step simulation, kinematics, the libm replay seam, gesture measurement. Pure |
-| `arcade_testkit` | `testkit/` (`lib/arcade/test/`) | lib, depends on `arcade`; a **dev-dep** | the suite harness, golden-row readers, digests. Holds IO and panics, so it goes on test paths only |
+| `arcade-physics` | `physics/` (`lib/arcade/physics/`) | lib, depends on `arcade` | fixed-step simulation, kinematics, the libm replay seam, gesture measurement. Pure |
+| `arcade-testkit` | `testkit/` (`lib/arcade/test/`) | lib, depends on `arcade`; a **dev-dep** | the suite harness, golden-row readers, digests. Holds IO and panics, so it goes on test paths only |
 
 Module `Arcade.X.Y` lives at `<package>/lib/arcade/x/y.march`. The example
 game `examples/putt/` is a package of its own (`putt`, an app) and is not part
@@ -49,7 +49,7 @@ Pure core (`arcade`):
 | `Arcade.SynthFeed` | `AudioCmd(cue)`, a game's audio commands over its own cue type; `block` (the audio callback), `Levels`, `track`/`restore` across a worklet restart |
 | `Arcade.Replay` | a game's reducer folded over actions: `replay` (rebuild a state from a seed and its actions), `drive` (a policy chooses actions until it has none), `steer` (whole turns, for a bot whose turn plays several actions) |
 
-Physics (`arcade_physics`):
+Physics (`arcade-physics`):
 
 | Module | Responsibility |
 |---|---|
@@ -73,7 +73,7 @@ Web shell (`arcade`, JS target only, `needs IO.Foreign`; march copies each
 | `Arcade.Web.SynthHost` | the synth the speakers hear, one per realm: `reset`, `serve(voices, cmds)` |
 | `Arcade.Web.SynthWorklet` | the worklet build's processor: `register(processor, rate, reset, serve)` |
 
-Test kit (`arcade_testkit`):
+Test kit (`arcade-testkit`):
 
 | Module | Responsibility |
 |---|---|
@@ -89,21 +89,21 @@ engine's source tree:
 ```toml
 [deps]
 arcade = { path = "../.." }
-arcade_physics = { path = "../../physics" }   # only if it uses Arcade.Physics
+arcade-physics = { path = "../../physics" }   # only if it uses Arcade.Physics
 
 [dev-deps]
-arcade_testkit = { path = "../../testkit" }
+arcade-testkit = { path = "../../testkit" }
 ```
 
-or by version, once the packages are published (see Publishing):
+or by version, from the registry at forgepm.org (see Publishing):
 
 ```toml
 [deps]
 arcade = "0.1.0"
-arcade_physics = "0.1.0"
+arcade-physics = "0.1.0"
 
 [dev-deps]
-arcade_testkit = "0.1.0"
+arcade-testkit = "0.1.0"
 ```
 
 `arcade.mk`, `scripts/` and `examples/` are the source tree's and are not
@@ -192,7 +192,7 @@ These keep the engine game-agnostic and keep a client's goldens bit-exact.
 From the engine root:
 
 ```sh
-scripts/check.sh            # forge check + lint of arcade, arcade_testkit, arcade_physics;
+scripts/check.sh            # forge check + lint of arcade, arcade-testkit, arcade-physics;
                             # march --check of the test kit and suites; fails on any warning
 scripts/run-all.sh native   # every engine suite as a native plain-main program
 scripts/run-all.sh js       # the same through node
@@ -247,20 +247,25 @@ deployed URL in their `og:url` and `og:image` tags, which must be absolute.
 ## Publishing
 
 The three packages are versioned together (0.1.0, see each `CHANGELOG.md`)
-and are published separately. Never run `forge publish` in this tree: forge
+and are published separately, to forgepm.org: `arcade` first, because the
+other two depend on it, then `arcade-physics` and `arcade-testkit`, each with
+`forge publish` in its staged directory and `FORGE_TOKEN` (a forgepm API key
+with the publish permission) in the environment. The registry answers
+`400 invalid_name` to a name with an underscore, which `--dry-run` does not
+check; `package.sh` does. Never run `forge publish` in this tree: forge
 tars the whole directory it runs in and has no include list, so the core's
 archive would carry `examples/`, `test/` and both nested packages. Stage them
 first:
 
 ```sh
-scripts/package.sh OUT       # OUT/arcade, OUT/arcade_physics, OUT/arcade_testkit
+scripts/package.sh OUT       # OUT/arcade, OUT/arcade-physics, OUT/arcade-testkit
 scripts/publish-check.sh     # stage to a temp dir, forge publish --dry-run each,
                              # then forge check + lint + audit each standalone
 ```
 
 A staged package ships `forge.toml`, `forge.caps.lock`, `LICENSE`, `README.md`,
 `CHANGELOG.md`, `lib/` and (core and test kit) `.march-lint.toml`. In the tree,
-arcade_physics and arcade_testkit name the core as
+arcade-physics and arcade-testkit name the core as
 `arcade = { version = "0.1.0", path = ".." }`; forge 0.7.0 treats that as a
 path dep and ignores the version, and `forge check` does not apply a
 `[patch.arcade]` section to the lib path, so neither form alone serves both

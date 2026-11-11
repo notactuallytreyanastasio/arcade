@@ -1,5 +1,5 @@
 [package]
-name = "arcade_testkit"
+name = "arcade-testkit"
 version = "0.1.0"
 type = "lib"
 description = "Arcade test kit: the suite harness, golden-table readers and digests, shared by native and JS runners. A dev-dep only."

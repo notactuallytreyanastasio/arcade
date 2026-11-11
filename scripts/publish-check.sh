@@ -4,8 +4,8 @@
 # tree, then
 #   1. in each published copy: `forge publish --dry-run`, and no `../` in its
 #      manifest;
-#   2. in a build copy beside it, where the core dep of arcade_physics and
-#      arcade_testkit points at the staged core (`path = "../arcade"`) instead
+#   2. in a build copy beside it, where the core dep of arcade-physics and
+#      arcade-testkit points at the staged core (`path = "../arcade"`) instead
 #      of the registry: forge check, forge lint and forge audit. This is the
 #      standalone build: nothing of the engine tree or any game is reachable.
 # Fails on any warning, as scripts/check.sh does; an empty `license` field is
@@ -38,7 +38,7 @@ scan() {
   fi
 }
 
-pkgs="arcade arcade_physics arcade_testkit"
+pkgs="arcade arcade-physics arcade-testkit"
 for p in $pkgs; do
   dir="$work/publish/$p"
   scan "forge publish --dry-run ($p)" sh -c "cd '$dir' && forge publish --dry-run"
@@ -52,7 +52,7 @@ done
 # The build copies.
 mkdir -p "$work/build"
 (cd "$work/publish" && tar -cf - $pkgs) | tar -xf - -C "$work/build"
-for p in arcade_physics arcade_testkit; do
+for p in arcade-physics arcade-testkit; do
   m="$work/build/$p/forge.toml"
   sed 's|^arcade = "\([^"]*\)"$|arcade = { version = "\1", path = "../arcade" }|' "$m" > "$m.new"
   mv "$m.new" "$m"
@@ -68,5 +68,5 @@ for p in $pkgs; do
   scan "forge audit ($p, staged)" sh -c "cd '$dir' && forge audit"
 done
 
-[ "$fail" -eq 0 ] && echo "publish-check: arcade, arcade_physics, arcade_testkit stage, build standalone and pass forge publish --dry-run"
+[ "$fail" -eq 0 ] && echo "publish-check: arcade, arcade-physics, arcade-testkit stage, build standalone and pass forge publish --dry-run"
 exit "$fail"

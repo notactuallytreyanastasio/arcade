@@ -1,6 +1,6 @@
 mod Arcade.Suite.Physics do
 
-  -- The arcade_physics package on its own: Sim's clock and step loop,
+  -- The arcade-physics package on its own: Sim's clock and step loop,
   -- Kinematics, the Trig seam and Gesture. Every expected value is exact: the
   -- inputs are dyadic, so each float operation rounds nothing and the answer
   -- can be checked by hand.

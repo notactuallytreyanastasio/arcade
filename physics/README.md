@@ -1,4 +1,4 @@
-# arcade_physics
+# arcade-physics
 
 The physics half of the `arcade` engine for March: a fixed-step simulation
 loop, kinematics, the libm replay seam and pointer-gesture measurement. Every
@@ -8,7 +8,7 @@ the engine's README lists them.
 ```toml
 [deps]
 arcade = "0.1.0"
-arcade_physics = "0.1.0"
+arcade-physics = "0.1.0"
 ```
 
 Physics that must replay bit for bit on native and JS takes its sines from
