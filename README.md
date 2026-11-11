@@ -4,7 +4,8 @@ A game engine for March games that run in the browser. The core is pure
 (`cap pure`, `needs ()` on every fn): maths, a seedable RNG, a camera, a 2D
 drawing vocabulary, a 32-bit-Float synth and the replay of a game's reducer.
 A thin JS-only shell (`Arcade.Web.*`, plus `arcade_*.mjs` glue) runs a game's
-frame loop, canvas, pointer and audio. A game supplies the rules, the scene and
+frame loop, canvas, pointer, keyboard and audio, and draws cel-shaded 3D
+with WebGL from a frame the pure core describes (`Arcade.Cel`). A game supplies the rules, the scene and
 the sounds; the engine never looks inside a game's model, messages or effects.
 
 Every number the engine computes is reproducible: the same seed and the same
@@ -24,8 +25,11 @@ pin those semantics.
 | `arcade-testkit` | `testkit/` (`lib/arcade/test/`) | lib, depends on `arcade`; a **dev-dep** | the suite harness, golden-row readers, digests. Holds IO and panics, so it goes on test paths only |
 
 Module `Arcade.X.Y` lives at `<package>/lib/arcade/x/y.march`. The example
-game `examples/putt/` is a package of its own (`putt`, an app) and is not part
-of the engine.
+games are packages of their own and not part of the engine: `examples/putt/`
+(top-down mini-golf on the 2D canvas) and `examples/tumble/` (a tilt-the-floor
+ball game in cel-shaded 3D, the game `Arcade.Mat4`, `Arcade.Cel`,
+`Arcade.Mesh`, `Arcade.Web.Gl`, `Arcade.Physics.Collide` and the keyboard
+were extracted from).
 
 ## Modules
 
@@ -40,13 +44,16 @@ Pure core (`arcade`):
 | `Arcade.Rng` | SplitMix64 as a value: every draw returns `(value, Rng)`; `next_unit`, `next_int_below`, `next_gaussian`, `shuffled`, `pick` |
 | `Arcade.Camera` | `Pose`, `Lens` (`Perspective(fov)` or `Orthographic(extent)`), `Rig`, `Viewport`, `Projection`; world to screen fractions and pixels, `ray`, `ray_plane`, `pixels_per_metre`, lean and shake helpers |
 | `Arcade.CameraFit` | a grid search for a `Rig` that puts weighted target points nearest the screen heights they want; the game supplies `pose_at` and the targets |
-| `Arcade.Draw` | the DrawOp vocabulary a game hands its shell (`Rgba`, `Shape`, `Paint`, `Pen`, `Lettering`, `Affine`, clips) and colour helpers (`hex`, `with_alpha`, `css`, `css_number`, `mix`, `lighter`) |
+| `Arcade.Draw` | the DrawOp vocabulary a game hands its shell (`Rgba`, `Shape`, `Paint`, `Pen`, `Lettering`, `Affine`, clips, `ClearTo` a colour or `Wipe` to transparent for a canvas laid over another) and colour helpers (`hex`, `with_alpha`, `css`, `css_number`, `mix`, `lighter`) |
 | `Arcade.Canvas` | DrawOps compiled to a `CanvasCall` list, every drawing decision made here, where it is testable |
 | `Arcade.Html` | HTML as data (`Tag`, `Words`, `Prop`), `escape`, `render` |
 | `Arcade.Svg` | DrawOps as SVG elements in `Arcade.Html` (`ops_svg`), clips as `<clipPath>` groups |
 | `Arcade.Float32` | Swift's 32-bit `Float` emulated on doubles: `f32` rounding, `sinf`, `expf`, `powf`, Float.pi, `plus_zero` |
 | `Arcade.Synth` | a polyphonic synth as a value: voices, stealing, `render`, rumble and drum beds; `SynthTuning` (`tuning()` is the default `new()` uses) |
 | `Arcade.SynthFeed` | `AudioCmd(cue)`, a game's audio commands over its own cue type; `block` (the audio callback), `Levels`, `track`/`restore` across a worklet restart |
+| `Arcade.Mat4` | 4x4 matrices, column-major: `mul`, `translate`, `scale`, `basis`, `stand_on` (z onto a normal), `turn` (about an axis, from the half-angle's tangent), `squared`, `about`, `view`, `perspective`, `point`, `project`, `floats`. No sin or cos |
+| `Arcade.Cel` | cel shading as data: `CelMesh` (twelve floats a vertex: position, normal, colour, rim), `CelLook` (bands, dark tone, light, ink, sky), `CelItem`, `CelFrame`; `tone`, the banding function a shader must match; `frame_floats`, `item_floats` |
+| `Arcade.Mesh` | triangle soup for `Arcade.Cel`: `tri`, `quad`, `box` (chosen faces, corner rims), `post`, `disc`, `sphere` (a split octahedron), `gem`, `ring16`, `done` |
 | `Arcade.Replay` | a game's reducer folded over actions: `replay` (rebuild a state from a seed and its actions), `drive` (a policy chooses actions until it has none), `steer` (whole turns, for a bot whose turn plays several actions) |
 
 Physics (`arcade-physics`):
@@ -55,6 +62,7 @@ Physics (`arcade-physics`):
 |---|---|
 | `Arcade.Physics.Sim` | `SimClock`, `tick`, timed events and sampled paths (`Timed`, `Sampled`, `records`), and the tail-recursive step loop `run_steps` |
 | `Arcade.Physics.Kinematics` | `ballistic`, `ballistic_height`, `integrate_friction`, `reflect`, `reflect_approaching`, `clamp_to_bound` |
+| `Arcade.Physics.Collide` | a moving disc against a fixed box (`off_box`) or disc (`off_disc`): put back out, reflected, optionally kicked |
 | `Arcade.Physics.Trig` | `SinCos`, `SineBook`, `sine_of`, `sin_cos`: the seam where recorded sines replace libm, for bit-exact replays across targets |
 | `Arcade.Physics.Gesture` | a flick measured from pointer samples: `TrackPoint`, `GestureLimits`, `measure` to `GestureMetrics` |
 
@@ -66,9 +74,10 @@ Web shell (`arcade`, JS target only, `needs IO.Foreign`; march copies each
 | `Arcade.Web.Runtime` | the frame loop: `launch(canvas_id, make)` runs a `WebHooks(model, msg, fx)` record; owns canvas, cell, dispatch, resize, rAF |
 | `Arcade.Web.Glue` | clock in seconds, rAF, view size, device pixel ratio, canvas sizing, seed limbs, visibility, vibrate, `data-*` marks |
 | `Arcade.Web.Cell` | the one state cell per JS realm (`put(s : a)`, `get() : a`) |
-| `Arcade.Web.Input` | one pointer followed on a canvas with coalesced samples, and a tap queue for DOM buttons |
+| `Arcade.Web.Input` | one pointer followed on a canvas with coalesced samples, the keyboard (`on_keys`: code and up or down), and a tap queue for DOM buttons |
 | `Arcade.Web.Canvas2d` | the Canvas 2D calls `Js.Canvas` lacks |
 | `Arcade.Web.Paint` | executes a `CanvasCall` list, one call each, deciding nothing |
+| `Arcade.Web.Gl` | an `Arcade.Cel` frame drawn with WebGL: `open(canvas_id)`, `upload(mesh)`, `frame(w, h, dpr, frame)`. Two passes an item: banded light, then the inked hull |
 | `Arcade.Web.Audio` | the AudioContext lifecycle: `install(AudioSetup, serve)` and `route(cmds)`; the setup names rate, gain, worklet URL, processor name and debug global |
 | `Arcade.Web.SynthHost` | the synth the speakers hear, one per realm: `reset`, `serve(voices, cmds)` |
 | `Arcade.Web.SynthWorklet` | the worklet build's processor: `register(processor, rate, reset, serve)` |
@@ -139,7 +148,12 @@ The game's side, as `examples/putt` does it:
    the game emits `AudioCmd(cue)` values and the engine's feed and worklet
    render them. The worklet is a second JS build whose entry calls
    `Arcade.Web.SynthWorklet.register`.
-5. **The shell** is one `WebHooks` record handed to
+5. **A 3D picture**, as `examples/tumble` does it: meshes built once with
+   `Arcade.Mesh` and uploaded by an effect, then an `Arcade.Cel.CelFrame` a
+   frame (a model matrix per item, from `Arcade.Mat4`), drawn by
+   `Arcade.Web.Gl.frame` from the shell's `hook_overlay`. The 2D canvas the
+   runtime paints lies over the WebGL one and opens its frame with `Wipe`.
+6. **The shell** is one `WebHooks` record handed to
    `Arcade.Web.Runtime.launch`: boot, update, perform, the tick, resize,
    pointer and visibility msgs, the scene, an overlay and the `data-*` marks.
 
@@ -205,12 +219,15 @@ only when it exits 0 and prints `HARNESS PASS` with non-zero counts, so a
 runner that ran nothing is red.
 
 The engine's suites (`test/suites/`: u64, numerics, num, vec, rng, camera,
-physics, replay) run with nothing of any game on the module path
+physics, replay, cel) run with nothing of any game on the module path
 (`lib:physics/lib:testkit/lib:test/suites:test/golden`). Their rows in
 `test/golden/` are a static copy, pinned once and never regenerated, so the
 engine has no generator of its own to depend on.
 
-The example game: `make -C examples/putt check test web playtest`.
+The example games: `make -C examples/putt check test web playtest` and
+`make -C examples/tumble check test web playtest`. The engine's `cel` suite
+covers `Arcade.Mat4`, `Arcade.Cel`, `Arcade.Mesh` and
+`Arcade.Physics.Collide`.
 
 Never run a bare `forge format`: on this toolchain it can delete the body of a
 `match do` or a multi-statement lambda. Use `make format` (`scripts/format.sh`),

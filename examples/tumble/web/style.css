@@ -28,7 +28,7 @@ html, body {
 }
 
 /* Both canvases are pinned to the corner. Arcade.Web.Glue sizes #hud and
-   tumble_gl.mjs sizes #stage's backing store every frame; #stage is laid
+   arcade_gl.mjs sizes #stage's backing store every frame; #stage is laid
    out to fill the window here. */
 #stage, #hud {
   position: fixed;

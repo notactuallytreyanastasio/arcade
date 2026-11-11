@@ -1,6 +1,6 @@
-mod Tumble.Mesh do
+mod Arcade.Mesh do
 
-  -- Shapes as triangle soup for Tumble.Cel: each builder adds its triangles
+  -- Shapes as triangle soup for Arcade.Cel: each builder adds its triangles
   -- to a list of floats kept newest first (twelve a vertex, reversed), and
   -- `done` turns the list the right way round. Triangles wind anticlockwise
   -- seen from outside. Circles come from a table of sixteen points, spheres

@@ -1,8 +1,8 @@
-mod Tumble.Cel do
+mod Arcade.Cel do
 
   -- Cel shading as data. A game describes a frame (meshes it has uploaded,
   -- where each stands, one light, how many bands of tone) and a shell draws
-  -- it; nothing here touches a GPU. The two things that make a picture read
+  -- it (Arcade.Web.Gl); nothing here touches a GPU. The two things that make a picture read
   -- as a cel are both decided here:
   --
   --   bands  the light on a surface is not smooth. n . l is squeezed to
@@ -21,8 +21,6 @@ mod Tumble.Cel do
   -- position, normal, colour (0...1), rim.
   cap pure
 
-  import Arcade.Vec3
-
   type CelMesh = { id : Int, floats : List(Float) }
 
   -- The look of a whole frame.
@@ -34,7 +32,7 @@ mod Tumble.Cel do
   type CelLook = {
     bands : Int,
     dark : Float,
-    light : Vec3,
+    light : Arcade.Vec3.Vec3,
     ink : Rgba,
     sky : Rgba
   }
@@ -56,7 +54,7 @@ mod Tumble.Cel do
   type CelFrame = {
     look : CelLook,
     view_proj : Mat4,
-    eye : Vec3,
+    eye : Arcade.Vec3.Vec3,
     items : List(CelItem)
   }
 
@@ -107,7 +105,7 @@ mod Tumble.Cel do
   """
   fn frame_floats(f : CelFrame) : List(Float) needs () do
     let l = f.look
-    List.append([chan(l.sky.red), chan(l.sky.green), chan(l.sky.blue), l.light.x, l.light.y, l.light.z, f.eye.x, f.eye.y, f.eye.z, int_to_float(l.bands), l.dark, chan(l.ink.red), chan(l.ink.green), chan(l.ink.blue)], Tumble.Mat4.floats(f.view_proj))
+    List.append([chan(l.sky.red), chan(l.sky.green), chan(l.sky.blue), l.light.x, l.light.y, l.light.z, f.eye.x, f.eye.y, f.eye.z, int_to_float(l.bands), l.dark, chan(l.ink.red), chan(l.ink.green), chan(l.ink.blue)], Arcade.Mat4.floats(f.view_proj))
   end
 
   doc """
@@ -115,7 +113,7 @@ mod Tumble.Cel do
   alpha; the ink's width; the gloss; then the model's sixteen.
   """
   fn item_floats(i : CelItem) : List(Float) needs () do
-    List.append([chan(i.tint.red), chan(i.tint.green), chan(i.tint.blue), i.alpha, i.ink, i.gloss], Tumble.Mat4.floats(i.model))
+    List.append([chan(i.tint.red), chan(i.tint.green), chan(i.tint.blue), i.alpha, i.ink, i.gloss], Arcade.Mat4.floats(i.model))
   end
 
 end

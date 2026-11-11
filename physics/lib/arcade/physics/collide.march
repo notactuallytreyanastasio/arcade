@@ -1,0 +1,84 @@
+mod Arcade.Physics.Collide do
+
+  -- A moving disc against things that do not move: a box and another disc.
+  -- Each answers None when they do not touch, or the disc put back out and
+  -- its velocity after the bounce. As in Kinematics, each function fixes its
+  -- order of float operations, and only + - * / and sqrt are used, so a run
+  -- that calls them is the same bits on every target.
+  cap pure
+
+  import Arcade.Vec2
+
+  doc """
+  A disc of radius r overlapping the box lo-hi: put back out along the line
+  from the box's nearest point and reflected off that normal keeping
+  `bounce`. A centre already inside leaves by the nearest face. None when
+  they do not touch.
+  """
+  fn off_box(p : Vec2, v : Vec2, r : Float, lo : Vec2, hi : Vec2, bounce : Float) : Option((Vec2, Vec2)) needs () do
+    let q = vec2(Arcade.Num.clamp(p.x, lo.x, hi.x), Arcade.Num.clamp(p.y, lo.y, hi.y))
+    let d = sub(p, q)
+    let d2 = dot(d, d)
+    if d2 >= r *. r do
+      None
+    else
+      if d2 > 0.0 do
+        do
+          let n = scale(d, 1.0 /. Math.sqrt(d2))
+          Some((add(q, scale(n, r)), Arcade.Physics.Kinematics.reflect_approaching(v, n, bounce)))
+        end
+      else
+        Some(by_face(p, v, r, lo, hi, bounce))
+      end
+    end
+  end
+
+  pfn by_face(p : Vec2, v : Vec2, r : Float, lo : Vec2, hi : Vec2, bounce : Float) : (Vec2, Vec2) needs () do
+    let left = p.x -. lo.x
+    let right = hi.x -. p.x
+    let below = p.y -. lo.y
+    let above = hi.y -. p.y
+    let side = Arcade.Num.min_float(left, right)
+    let ends = Arcade.Num.min_float(below, above)
+    let (n, out) =
+      if side <= ends do
+        if left <= right do
+          (vec2(-1.0, 0.0), vec2(lo.x -. r, p.y))
+        else
+          (vec2(1.0, 0.0), vec2(hi.x +. r, p.y))
+        end
+      else
+        if below <= above do
+          (vec2(0.0, -1.0), vec2(p.x, lo.y -. r))
+        else
+          (vec2(0.0, 1.0), vec2(p.x, hi.y +. r))
+        end
+      end
+    (out, Arcade.Physics.Kinematics.reflect_approaching(v, n, bounce))
+  end
+
+  doc """
+  A disc of radius r touching a fixed disc of radius pr at `post`: put back out
+  along the line of centres, and when it was closing, reflected keeping
+  `bounce` and kicked away at `kick` m/s. None when they do not touch.
+  """
+  fn off_disc(p : Vec2, v : Vec2, r : Float, post : Vec2, pr : Float, bounce : Float, kick : Float) : Option((Vec2, Vec2)) needs () do
+    let d = sub(p, post)
+    let d2 = dot(d, d)
+    let reach = r +. pr
+    if d2 >= reach *. reach || d2 <= 0.0 do
+      None
+    else
+      do
+        let n = scale(d, 1.0 /. Math.sqrt(d2))
+        let out = add(post, scale(n, reach))
+        if dot(v, n) < 0.0 do
+          Some((out, add(Arcade.Physics.Kinematics.reflect(v, n, bounce), scale(n, kick))))
+        else
+          Some((out, v))
+        end
+      end
+    end
+  end
+
+end

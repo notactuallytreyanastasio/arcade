@@ -242,48 +242,7 @@ mod Putt.Roll do
   box leaves by the nearest face. None when they do not touch.
   """
   fn block(tune : PuttTuning, b : PuttBox, p : Vec2, v : Vec2) : Option((Vec2, Vec2)) needs () do
-    let r = tune.ball_radius
-    let q =
-      vec2(Arcade.Num.clamp(p.x, b.lo.x, b.hi.x), Arcade.Num.clamp(p.y, b.lo.y, b.hi.y))
-    let d = sub(p, q)
-    let d2 = dot(d, d)
-    if d2 >= r *. r do
-      None
-    else
-      if d2 > 0.0 do
-        do
-          let n = scale(d, 1.0 /. Math.sqrt(d2))
-          Some((add(q, scale(n, r)), Arcade.Physics.Kinematics.reflect_approaching(v, n, tune.block_bounce)))
-        end
-      else
-        Some(leave_by_face(tune, b, p, v))
-      end
-    end
-  end
-
-  pfn leave_by_face(tune : PuttTuning, b : PuttBox, p : Vec2, v : Vec2) : (Vec2, Vec2) needs () do
-    let r = tune.ball_radius
-    let left = p.x -. b.lo.x
-    let right = b.hi.x -. p.x
-    let below = p.y -. b.lo.y
-    let above = b.hi.y -. p.y
-    let side = Arcade.Num.min_float(left, right)
-    let ends = Arcade.Num.min_float(below, above)
-    let (n, out) =
-      if side <= ends do
-        if left <= right do
-          (vec2(-1.0, 0.0), vec2(b.lo.x -. r, p.y))
-        else
-          (vec2(1.0, 0.0), vec2(b.hi.x +. r, p.y))
-        end
-      else
-        if below <= above do
-          (vec2(0.0, -1.0), vec2(p.x, b.lo.y -. r))
-        else
-          (vec2(0.0, 1.0), vec2(p.x, b.hi.y +. r))
-        end
-      end
-    (out, Arcade.Physics.Kinematics.reflect_approaching(v, n, tune.block_bounce))
+    Arcade.Physics.Collide.off_box(p, v, tune.ball_radius, b.lo, b.hi, tune.block_bounce)
   end
 
 end

@@ -1,0 +1,212 @@
+mod Arcade.Suite.Cel do
+
+  -- Arcade.Mat4, Arcade.Cel, Arcade.Mesh and Arcade.Physics.Collide, each
+  -- against what it claims: the matrices as algebra (a turn keeps lengths,
+  -- right angles and its axis; a camera's target projects to the middle),
+  -- the tone as a function (as many values as bands, stepping where it
+  -- should), the meshes as geometry (every triangle of a closed shape wound,
+  -- lit and rimmed outward), and the collisions on cases small enough to
+  -- work by hand.
+  import Arcade.Test.Harness
+
+  fn near(a : Float, b : Float, tol : Float, what : String) : Outcome do
+    expect(Math.abs(a -. b) <= tol, what ++ ": got " ++ float_to_string(a) ++ ", want " ++ float_to_string(b))
+  end
+
+  fn look(bands : Int) : CelLook do
+    {
+      bands: bands,
+      dark: 0.25,
+      light: Arcade.Vec3.normalized(Arcade.Vec3.vec3(-1.0, -1.0, 2.0)),
+      ink: Arcade.Draw.hex(0),
+      sky: Arcade.Draw.hex(255)
+    }
+  end
+
+  -- ---- Tone ----
+  fn distinct(xs : List(Float), seen : List(Float)) : List(Float) do
+    match xs do
+    Nil -> List.reverse(seen)
+    Cons(x, rest) -> if List.any(seen, fn y -> y == x) do distinct(rest, seen) else distinct(rest, Cons(x, seen)) end
+    end
+  end
+
+  fn tones_seen(bands : Int) : Int do
+    let l = look(bands)
+    List.length(distinct(List.map(List.range(0, 2001), fn i -> Arcade.Cel.tone(l, int_to_float(i) /. 1000.0 -. 1.0)), []))
+  end
+
+  fn case_tone() : Outcome do
+    let three = look(3)
+    all([
+      expect_int(tones_seen(2), 2, "two bands, two tones over 2001 angles"),
+      expect_int(tones_seen(3), 3, "three bands, three tones"),
+      expect_int(tones_seen(5), 5, "five bands, five tones"),
+      expect(Arcade.Cel.tone(three, -1.0) == 0.25, "facing away is the dark tone"),
+      expect(Arcade.Cel.tone(three, 1.0) == 1.0, "facing the light is the colour itself"),
+      expect(Arcade.Cel.tone(three, 0.0) == 0.625, "side-on, of three bands, is the middle tone"),
+      expect(Arcade.Cel.tone(three, 5.0) == 1.0 && Arcade.Cel.tone(three, -5.0) == 0.25, "a dot product out of range is held to the ends"),
+      expect_int(List.length(Arcade.Cel.tones(three)), 3, "tones lists them")
+    ])
+  end
+
+  -- ---- Matrices ----
+  fn case_matrices() : Outcome do
+    let axis = Arcade.Vec3.normalized(Arcade.Vec3.vec3(1.0, 2.0, 3.0))
+    let turn = Arcade.Mat4.turn(axis, 0.3)
+    let x = Arcade.Mat4.point(turn, Arcade.Vec3.vec3(1.0, 0.0, 0.0))
+    let y = Arcade.Mat4.point(turn, Arcade.Vec3.vec3(0.0, 1.0, 0.0))
+    let kept = Arcade.Mat4.point(turn, axis)
+    let quarter = Arcade.Mat4.point(Arcade.Mat4.turn(Arcade.Vec3.vec3(0.0, 0.0, 1.0), 1.0), Arcade.Vec3.vec3(1.0, 0.0, 0.0))
+    let n = Arcade.Vec3.normalized(Arcade.Vec3.vec3(0.1, -0.15, 1.0))
+    let stood = Arcade.Mat4.point(Arcade.Mat4.stand_on(n), Arcade.Vec3.vec3(0.0, 0.0, 1.0))
+    let pivot = Arcade.Vec3.vec3(3.0, 4.0, 0.0)
+    let fixed = Arcade.Mat4.point(Arcade.Mat4.about(pivot, Arcade.Mat4.stand_on(n)), pivot)
+    let pose = { eye: Arcade.Vec3.vec3(3.0, -5.0, 6.0), target: Arcade.Vec3.vec3(3.0, 2.0, 0.0), up: Arcade.Vec3.vec3(0.0, 0.0, 1.0) }
+    let (f, r, u) = Arcade.Camera.basis(pose)
+    let vp = Arcade.Mat4.mul(Arcade.Mat4.perspective(0.5, 1.5, 0.5, 90.0), Arcade.Mat4.view(pose.eye, f, r, u))
+    let drifted = Arcade.Mat4.squared(Arcade.Mat4.mul(Arcade.Mat4.scale(1.001), turn))
+    let dx = Arcade.Mat4.point(drifted, Arcade.Vec3.vec3(1.0, 0.0, 0.0))
+    let moved = Arcade.Mat4.point(Arcade.Mat4.mul(Arcade.Mat4.translate(Arcade.Vec3.vec3(1.0, 2.0, 3.0)), Arcade.Mat4.scale(2.0)), Arcade.Vec3.vec3(1.0, 1.0, 1.0))
+    all([
+      near(Arcade.Vec3.length(x), 1.0, 0.000000000001, "a turn keeps lengths"),
+      near(Arcade.Vec3.dot(x, y), 0.0, 0.000000000001, "and right angles"),
+      near(Arcade.Vec3.length(Arcade.Vec3.sub(kept, axis)), 0.0, 0.000000000001, "and its own axis"),
+      expect(quarter.x == 0.0 && quarter.y == 1.0 && quarter.z == 0.0, "a half-angle tangent of 1 about z is a quarter turn: x to y, exactly"),
+      near(Arcade.Vec3.length(Arcade.Vec3.sub(stood, n)), 0.0, 0.000000000001, "stand_on takes z to the normal"),
+      near(Arcade.Vec3.length(Arcade.Vec3.sub(fixed, pivot)), 0.0, 0.000000000001, "a turn about a point leaves the point"),
+      near(Arcade.Vec3.length(dx), 1.0, 0.000000000001, "squared makes a drifted rotation a rotation again"),
+      expect(moved.x == 3.0 && moved.y == 4.0 && moved.z == 5.0, "mul applies its second matrix first: scaled by 2, then moved"),
+      match Arcade.Mat4.project(vp, pose.target) do
+      Some(c) -> all([near(c.x, 0.0, 0.000000000001, "what a camera looks at is at the middle of the screen, x"), near(c.y, 0.0, 0.000000000001, "and y"), expect(c.z > -1.0 && c.z < 1.0, "between the near and far planes")])
+      None -> Mismatch("the camera's target is behind it")
+      end,
+      expect(Option.is_none(Arcade.Mat4.project(vp, Arcade.Vec3.vec3(3.0, -9.0, 9.0))), "a point behind the camera does not project"),
+      expect_int(List.length(Arcade.Mat4.floats(vp)), 16, "sixteen floats")
+    ])
+  end
+
+  -- ---- Meshes ----
+  type MeshCorner = { p : Arcade.Vec3.Vec3, n : Arcade.Vec3.Vec3, rim : Arcade.Vec3.Vec3 }
+
+  fn mesh_corners(fs : List(Float), acc : List(MeshCorner)) : List(MeshCorner) do
+    match fs do
+    Cons(px, Cons(py, Cons(pz, Cons(nx, Cons(ny, Cons(nz, Cons(_, Cons(_, Cons(_, Cons(rx, Cons(ry, Cons(rz, rest)))))))))))) -> do
+      mesh_corners(rest, Cons({ p: Arcade.Vec3.vec3(px, py, pz), n: Arcade.Vec3.vec3(nx, ny, nz), rim: Arcade.Vec3.vec3(rx, ry, rz) }, acc))
+    end
+    _ -> List.reverse(acc)
+    end
+  end
+
+  -- How many triangles of a mesh do not face away from `centre`: wound
+  -- clockwise seen from outside, or with a normal or a rim pointing in.
+  fn inward(cs : List(MeshCorner), centre : Arcade.Vec3.Vec3, bad : Int) : Int do
+    match cs do
+    Cons(a, Cons(b, Cons(c, rest))) -> do
+      let face = Arcade.Mesh.facing(a.p, b.p, c.p)
+      let mid = Arcade.Vec3.scale(Arcade.Vec3.add(Arcade.Vec3.add(a.p, b.p), c.p), 1.0 /. 3.0)
+      let out = Arcade.Vec3.sub(mid, centre)
+      let ok =
+        Arcade.Vec3.dot(face, out) > 0.0 && Arcade.Vec3.dot(a.n, face) > 0.0 && Arcade.Vec3.dot(a.rim, out) > 0.0 && Arcade.Vec3.dot(b.rim, out) > 0.0 && Arcade.Vec3.dot(c.rim, out) > 0.0
+      inward(rest, centre, if ok do bad else bad + 1 end)
+    end
+    _ -> bad
+    end
+  end
+
+  fn mesh_of(rev : List(Float)) : CelMesh do
+    Arcade.Mesh.done(9, rev)
+  end
+
+  fn case_meshes_face_out() : Outcome do
+    let white = Arcade.Draw.hex(16777215)
+    let ball = mesh_of(Arcade.Mesh.sphere([], 3, white, white))
+    let gem = mesh_of(Arcade.Mesh.gem([], 0.2, 0.3, white))
+    let lo = Arcade.Vec3.vec3(1.0, 2.0, -0.5)
+    let hi = Arcade.Vec3.vec3(2.0, 3.0, 0.0)
+    let box = mesh_of(Arcade.Mesh.box([], lo, hi, white, white, Arcade.Mesh.all_faces()))
+    let post = mesh_of(Arcade.Mesh.post([], Arcade.Vec3.vec3(4.0, 5.0, 0.0), 0.2, 0.55, white, white))
+    let disc = mesh_of(Arcade.Mesh.disc([], 1.0, white))
+    let o = Arcade.Vec3.zero()
+    all([
+      expect_int(Arcade.Cel.triangles(ball), 512, "a sphere split three times is 8 x 4^3 triangles"),
+      expect_int(inward(mesh_corners(ball.floats, []), o, 0), 0, "every one faces out"),
+      expect_int(Arcade.Cel.triangles(gem), 8, "a gem has eight faces"),
+      expect_int(inward(mesh_corners(gem.floats, []), o, 0), 0, "facing out"),
+      expect_int(Arcade.Cel.triangles(box), 12, "a box is twelve triangles"),
+      expect_int(inward(mesh_corners(box.floats, []), Arcade.Vec3.vec3(1.5, 2.5, -0.25), 0), 0, "facing out"),
+      expect_int(Arcade.Cel.triangles(post), 48, "a post is sixteen sides of two and sixteen slices of cap"),
+      expect_int(inward(mesh_corners(post.floats, []), Arcade.Vec3.vec3(4.0, 5.0, 0.2), 0), 0, "facing out"),
+      expect_int(Arcade.Cel.triangles(disc), 16, "a disc is sixteen slices"),
+      expect_int(inward(mesh_corners(disc.floats, []), Arcade.Vec3.vec3(0.0, 0.0, -1.0), 0), 0, "facing up")
+    ])
+  end
+
+  fn case_floats() : Outcome do
+    let l = look(3)
+    let frame = { look: l, view_proj: Arcade.Mat4.identity(), eye: Arcade.Vec3.vec3(1.0, 2.0, 3.0), items: [] }
+    let item = { mesh: 7, model: Arcade.Mat4.translate(Arcade.Vec3.vec3(4.0, 5.0, 6.0)), tint: Arcade.Draw.hex(16711680), alpha: 0.5, ink: 0.03, gloss: 1.0 }
+    let ff = Arcade.Cel.frame_floats(frame)
+    let fi = Arcade.Cel.item_floats(item)
+    all([
+      expect_int(List.length(ff), 30, "a frame is thirty floats"),
+      expect(List.nth_opt(ff, 2) == Some(1.0), "the sky's blue, 255, is 1.0"),
+      expect(List.nth_opt(ff, 9) == Some(3.0), "the bands"),
+      expect(List.nth_opt(ff, 10) == Some(0.25), "the dark tone"),
+      expect_int(List.length(fi), 22, "an item is twenty-two"),
+      expect(List.nth_opt(fi, 0) == Some(1.0) && List.nth_opt(fi, 1) == Some(0.0), "its tint, red"),
+      expect(List.nth_opt(fi, 3) == Some(0.5) && List.nth_opt(fi, 4) == Some(0.03), "its alpha and ink"),
+      expect(List.nth_opt(fi, 18) == Some(4.0) && List.nth_opt(fi, 20) == Some(6.0), "its model's last column is where it stands")
+    ])
+  end
+
+  -- ---- Collisions ----
+  fn case_collide() : Outcome do
+    let lo = Arcade.Vec2.vec2(0.0, 0.0)
+    let hi = Arcade.Vec2.vec2(2.0, 1.0)
+    let down = Arcade.Vec2.vec2(0.0, -3.0)
+    let clear = Arcade.Physics.Collide.off_box(Arcade.Vec2.vec2(1.0, 1.6), down, 0.5, lo, hi, 0.5)
+    let top = Arcade.Physics.Collide.off_box(Arcade.Vec2.vec2(1.0, 1.25), down, 0.5, lo, hi, 0.5)
+    let leaving = Arcade.Physics.Collide.off_box(Arcade.Vec2.vec2(1.0, 1.25), Arcade.Vec2.vec2(0.0, 3.0), 0.5, lo, hi, 0.5)
+    let inside = Arcade.Physics.Collide.off_box(Arcade.Vec2.vec2(0.2, 0.5), Arcade.Vec2.vec2(1.0, 0.0), 0.5, lo, hi, 0.5)
+    let post = Arcade.Vec2.vec2(0.0, 0.0)
+    let hit = Arcade.Physics.Collide.off_disc(Arcade.Vec2.vec2(0.6, 0.0), Arcade.Vec2.vec2(-2.0, 1.0), 0.5, post, 0.25, 0.5, 1.0)
+    let miss = Arcade.Physics.Collide.off_disc(Arcade.Vec2.vec2(0.8, 0.0), Arcade.Vec2.vec2(-2.0, 0.0), 0.5, post, 0.25, 0.5, 1.0)
+    let going = Arcade.Physics.Collide.off_disc(Arcade.Vec2.vec2(0.6, 0.0), Arcade.Vec2.vec2(2.0, 0.0), 0.5, post, 0.25, 0.5, 1.0)
+    all([
+      expect(Option.is_none(clear), "a disc a radius clear of a box does not touch it"),
+      match top do
+      Some((p, v)) -> expect(p.x == 1.0 && p.y == 1.5 && v.x == 0.0 && v.y == 1.5, "falling onto the top face: set a radius above it, half the speed back")
+      None -> Mismatch("a disc overlapping the top face was missed")
+      end,
+      match leaving do
+      Some((p, v)) -> expect(p.y == 1.5 && v.y == 3.0, "already leaving: put out, the speed kept")
+      None -> Mismatch("a disc overlapping the top face was missed")
+      end,
+      match inside do
+      Some((p, v)) -> expect(p.x == -0.5 && p.y == 0.5 && v.x == -0.5, "a centre inside leaves by the nearest face, here the left")
+      None -> Mismatch("a disc inside the box was missed")
+      end,
+      match hit do
+      Some((p, v)) -> expect(p.x == 0.75 && p.y == 0.0 && v.x == 2.0 && v.y == 1.0, "onto a post: out to the sum of the radii, the closing speed halved and reversed, a kick of 1 on top, the rest kept")
+      None -> Mismatch("a disc overlapping a post was missed")
+      end,
+      expect(Option.is_none(miss), "discs further apart than their radii do not touch"),
+      match going do
+      Some((p, v)) -> expect(p.x == 0.75 && v.x == 2.0, "moving apart: put out, no bounce and no kick")
+      None -> Mismatch("a disc overlapping a post was missed")
+      end
+    ])
+  end
+
+  fn cases() : List(Case) do
+    [
+      case("the tone is banded", fn () -> case_tone()),
+      case("matrices", fn () -> case_matrices()),
+      case("meshes face out", fn () -> case_meshes_face_out()),
+      case("a frame and an item as floats", fn () -> case_floats()),
+      case("a disc against a box and a disc", fn () -> case_collide())
+    ]
+  end
+
+end

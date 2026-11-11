@@ -9,7 +9,7 @@
 //   keys on the desktop (on or off, as a player's are) and a dragged finger
 //   on the phone; that the picture is a cel: nearly every pixel of the 3D
 //   canvas is the sky, the ink, or a mesh colour times one of the look's
-//   tones, as Tumble.Cel.tone says and the shader must agree (measured on
+//   tones, as Arcade.Cel.tone says and the shader must agree (measured on
 //   the pixels that are not sky); what a frame
 //   costs in script time; the speakers; a clean console.
 // Seeds are random, so rounds differ run to run: counts are bounds.
@@ -76,7 +76,7 @@ const timeFrames = () => {
 async function celCensus(page, m) {
   const counts = await page.evaluate(() => {
     const c = document.getElementById("stage");
-    const px = globalThis.__tumbleGl.pixels(0, 0, c.width, c.height);
+    const px = globalThis.__arcadeGl.pixels(0, 0, c.width, c.height);
     const by = new Map();
     for (let i = 0; i < px.length; i += 4) {
       const k = (px[i] << 16) | (px[i + 1] << 8) | px[i + 2];
@@ -194,7 +194,7 @@ const browser = await puppeteer.launch({ executablePath: chrome, headless: "new"
   const cost = await page.evaluate(() => {
     const t = globalThis.__frameTimes.slice().sort((a, b) => a - b);
     const sum = t.reduce((a, b) => a + b, 0);
-    return { n: t.length, mean: sum / t.length, p95: t[Math.floor(t.length * 0.95)], max: t[t.length - 1], gl: globalThis.__tumbleGl.stats };
+    return { n: t.length, mean: sum / t.length, p95: t[Math.floor(t.length * 0.95)], max: t[t.length - 1], gl: globalThis.__arcadeGl.stats };
   });
   check(cost.mean < 4 && cost.p95 < 8, `desktop: a frame's script (update, both canvases) took ${cost.mean.toFixed(2)} ms on average, ${cost.p95.toFixed(2)} ms at the 95th percentile, ${cost.max.toFixed(1)} ms at worst, over ${cost.n} frames (16.7 ms is a 60 Hz frame)`);
   check(cost.gl.draws <= 60 && cost.gl.triangles <= 8000, `desktop: the last frame was ${cost.gl.draws} draw calls and ${cost.gl.triangles} triangles; ${cost.gl.uploads} meshes uploaded all session`);

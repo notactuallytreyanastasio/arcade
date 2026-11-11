@@ -3,9 +3,10 @@ mod Tumble.Suite.App do
   -- The program and its picture, with no browser: Tumble.App is driven by
   -- the messages a shell would send it (ticks, a key, a dragged pointer),
   -- and what it answers (its model, its effects, its frame) is checked.
-  -- The meshes are checked as geometry (every triangle of a closed shape
-  -- faces out), the cel tone as a function (it has exactly as many values as
-  -- the look has bands), and the matrices as algebra.
+  -- The look's tone is checked as a function (it has exactly as many values
+  -- as the look has bands) and the scene's matrices as geometry. The mesh
+  -- builders and the matrix algebra themselves are the engine's, and its
+  -- cel suite's.
   import Arcade.Test.Harness
 
   fn seed_of(n : Int) : Arcade.U64.U64 do
@@ -251,76 +252,21 @@ mod Tumble.Suite.App do
   fn case_tone_is_banded() : Outcome do
     let look = Tumble.Scene.look()
     let sweep =
-      List.map(List.range(0, 2001), fn i -> Tumble.Cel.tone(look, int_to_float(i) /. 1000.0 -. 1.0))
+      List.map(List.range(0, 2001), fn i -> Arcade.Cel.tone(look, int_to_float(i) /. 1000.0 -. 1.0))
     let seen = distinct(sweep, [])
-    let tones = Tumble.Cel.tones(look)
+    let tones = Arcade.Cel.tones(look)
     all([
       expect_int(List.length(seen), 4, "2001 angles from facing away to facing the light give exactly four tones"),
       expect_int(List.length(tones), 4, "and the look lists four"),
-      expect(Tumble.Cel.tone(look, -1.0) == 0.42, "the darkest is the look's dark"),
-      expect(Tumble.Cel.tone(look, 1.0) == 1.0, "the lightest is the colour itself"),
-      near(Tumble.Cel.tone(look, 0.1), 0.42 +. 0.58 *. 2.0 /. 3.0, 0.000000000001, "just past side-on is the third tone"),
-      expect(Tumble.Cel.tone(look, -0.01) < Tumble.Cel.tone(look, 0.01), "the tone steps at side-on"),
+      expect(Arcade.Cel.tone(look, -1.0) == 0.42, "the darkest is the look's dark"),
+      expect(Arcade.Cel.tone(look, 1.0) == 1.0, "the lightest is the colour itself"),
+      near(Arcade.Cel.tone(look, 0.1), 0.42 +. 0.58 *. 2.0 /. 3.0, 0.000000000001, "just past side-on is the third tone"),
+      expect(Arcade.Cel.tone(look, -0.01) < Arcade.Cel.tone(look, 0.01), "the tone steps at side-on"),
       near(Arcade.Vec3.length(look.light), 1.0, 0.000000000001, "the light is a unit vector")
     ])
   end
 
-  -- ---- Meshes ----
-  type MeshCorner = { p : Arcade.Vec3.Vec3, n : Arcade.Vec3.Vec3, rim : Arcade.Vec3.Vec3 }
-
-  fn mesh_corners(fs : List(Float), acc : List(MeshCorner)) : List(MeshCorner) do
-    match fs do
-    Cons(px, Cons(py, Cons(pz, Cons(nx, Cons(ny, Cons(nz, Cons(_, Cons(_, Cons(_, Cons(rx, Cons(ry, Cons(rz, rest)))))))))))) -> do
-      mesh_corners(rest, Cons({ p: Arcade.Vec3.vec3(px, py, pz), n: Arcade.Vec3.vec3(nx, ny, nz), rim: Arcade.Vec3.vec3(rx, ry, rz) }, acc))
-    end
-    _ -> List.reverse(acc)
-    end
-  end
-
-  -- How many triangles of a mesh do not face away from `centre`: wound
-  -- clockwise seen from outside, or with a normal or a rim pointing in.
-  fn inward(cs : List(MeshCorner), centre : Arcade.Vec3.Vec3, bad : Int) : Int do
-    match cs do
-    Cons(a, Cons(b, Cons(c, rest))) -> do
-      let face = Tumble.Mesh.facing(a.p, b.p, c.p)
-      let mid = Arcade.Vec3.scale(Arcade.Vec3.add(Arcade.Vec3.add(a.p, b.p), c.p), 1.0 /. 3.0)
-      let out = Arcade.Vec3.sub(mid, centre)
-      let ok =
-        Arcade.Vec3.dot(face, out) > 0.0 && Arcade.Vec3.dot(a.n, face) > 0.0 && Arcade.Vec3.dot(a.rim, out) > 0.0 && Arcade.Vec3.dot(b.rim, out) > 0.0 && Arcade.Vec3.dot(c.rim, out) > 0.0
-      inward(rest, centre, if ok do bad else bad + 1 end)
-    end
-    _ -> bad
-    end
-  end
-
-  fn mesh_of(rev : List(Float)) : CelMesh do
-    Tumble.Mesh.done(9, rev)
-  end
-
-  fn case_meshes_face_out() : Outcome do
-    let white = Arcade.Draw.hex(16777215)
-    let ball = mesh_of(Tumble.Mesh.sphere([], 3, white, white))
-    let gem = mesh_of(Tumble.Mesh.gem([], 0.2, 0.3, white))
-    let lo = Arcade.Vec3.vec3(1.0, 2.0, -0.5)
-    let hi = Arcade.Vec3.vec3(2.0, 3.0, 0.0)
-    let box = mesh_of(Tumble.Mesh.box([], lo, hi, white, white, Tumble.Mesh.all_faces()))
-    let post = mesh_of(Tumble.Mesh.post([], Arcade.Vec3.vec3(4.0, 5.0, 0.0), 0.2, 0.55, white, white))
-    let disc = mesh_of(Tumble.Mesh.disc([], 1.0, white))
-    let o = Arcade.Vec3.zero()
-    all([
-      expect_int(Tumble.Cel.triangles(ball), 512, "a sphere split three times is 8 x 4^3 triangles"),
-      expect_int(inward(mesh_corners(ball.floats, []), o, 0), 0, "every one faces out"),
-      expect_int(Tumble.Cel.triangles(gem), 8, "a gem has eight faces"),
-      expect_int(inward(mesh_corners(gem.floats, []), o, 0), 0, "facing out"),
-      expect_int(Tumble.Cel.triangles(box), 12, "a box is twelve triangles"),
-      expect_int(inward(mesh_corners(box.floats, []), Arcade.Vec3.vec3(1.5, 2.5, -0.25), 0), 0, "facing out"),
-      expect_int(Tumble.Cel.triangles(post), 48, "a post is sixteen sides of two and sixteen slices of cap"),
-      expect_int(inward(mesh_corners(post.floats, []), Arcade.Vec3.vec3(4.0, 5.0, 0.2), 0), 0, "facing out"),
-      expect_int(Tumble.Cel.triangles(disc), 16, "a disc is sixteen slices"),
-      expect_int(inward(mesh_corners(disc.floats, []), Arcade.Vec3.vec3(0.0, 0.0, -1.0), 0), 0, "facing up")
-    ])
-  end
-
+  -- ---- The board's mesh ----
   fn case_board_mesh() : Outcome do
     let rs = Tumble.Rules.rules()
     let b = Tumble.Gen.runway()
@@ -329,8 +275,8 @@ mod Tumble.Suite.App do
     let big = Tumble.Scene.board_mesh(Tumble.Scene.sight(), rs.tune, hard, false)
     all([
       expect_int(List.length(mesh.floats) % 36, 0, "whole triangles"),
-      expect_int(Tumble.Cel.triangles(mesh), 45 * 4 + 28 * 2 + 36, "the runway: 45 tiles' tops and bottoms, 28 edge faces, the arch's three boxes"),
-      expect(Tumble.Cel.triangles(big) < 2500, "the hardest board is under 2500 triangles: " ++ int_to_string(Tumble.Cel.triangles(big)))
+      expect_int(Arcade.Cel.triangles(mesh), 45 * 4 + 28 * 2 + 36, "the runway: 45 tiles' tops and bottoms, 28 edge faces, the arch's three boxes"),
+      expect(Arcade.Cel.triangles(big) < 2500, "the hardest board is under 2500 triangles: " ++ int_to_string(Arcade.Cel.triangles(big)))
     ])
   end
 
@@ -338,37 +284,37 @@ mod Tumble.Suite.App do
   fn case_matrices() : Outcome do
     let st = Tumble.Scene.sight()
     let axis = Arcade.Vec3.normalized(Arcade.Vec3.vec3(1.0, 2.0, 3.0))
-    let turn = Tumble.Mat4.turn(axis, 0.3)
-    let x = Tumble.Mat4.point(turn, Arcade.Vec3.vec3(1.0, 0.0, 0.0))
-    let y = Tumble.Mat4.point(turn, Arcade.Vec3.vec3(0.0, 1.0, 0.0))
-    let kept = Tumble.Mat4.point(turn, axis)
+    let turn = Arcade.Mat4.turn(axis, 0.3)
+    let x = Arcade.Mat4.point(turn, Arcade.Vec3.vec3(1.0, 0.0, 0.0))
+    let y = Arcade.Mat4.point(turn, Arcade.Vec3.vec3(0.0, 1.0, 0.0))
+    let kept = Arcade.Mat4.point(turn, axis)
     let n = Arcade.Vec3.normalized(Arcade.Vec3.vec3(0.1, -0.15, 1.0))
-    let stood = Tumble.Mat4.point(Tumble.Mat4.stand_on(n), Arcade.Vec3.vec3(0.0, 0.0, 1.0))
+    let stood = Arcade.Mat4.point(Arcade.Mat4.stand_on(n), Arcade.Vec3.vec3(0.0, 0.0, 1.0))
     let pivot = Arcade.Vec3.vec3(3.0, 4.0, 0.0)
-    let fixed = Tumble.Mat4.point(Tumble.Mat4.about(pivot, Tumble.Mat4.stand_on(n)), pivot)
+    let fixed = Arcade.Mat4.point(Arcade.Mat4.about(pivot, Arcade.Mat4.stand_on(n)), pivot)
     let at = Arcade.Vec2.vec2(3.5, 6.0)
     let vp = Tumble.Scene.view_proj(st, at, 1.5)
     let cam = Tumble.Scene.pose(st, at, 1.5)
     let ball =
       { at: Arcade.Vec2.vec2(2.0, 2.0), vel: Arcade.Vec2.zero(), z: 0.0, vz: 0.0, tilt: Arcade.Vec2.vec2(1.0, 0.0) }
     let w = Tumble.Scene.world(st, ball)
-    let downhill = Tumble.Mat4.point(w, Arcade.Vec3.vec3(3.0, 2.0, 0.0))
-    let uphill = Tumble.Mat4.point(w, Arcade.Vec3.vec3(1.0, 2.0, 0.0))
+    let downhill = Arcade.Mat4.point(w, Arcade.Vec3.vec3(3.0, 2.0, 0.0))
+    let uphill = Arcade.Mat4.point(w, Arcade.Vec3.vec3(1.0, 2.0, 0.0))
     all([
       near(Arcade.Vec3.length(x), 1.0, 0.000000000001, "a turn keeps lengths"),
       near(Arcade.Vec3.dot(x, y), 0.0, 0.000000000001, "and right angles"),
       near(Arcade.Vec3.length(Arcade.Vec3.sub(kept, axis)), 0.0, 0.000000000001, "and its own axis"),
       near(Arcade.Vec3.length(Arcade.Vec3.sub(stood, n)), 0.0, 0.000000000001, "stand_on takes z to the normal"),
       near(Arcade.Vec3.length(Arcade.Vec3.sub(fixed, pivot)), 0.0, 0.000000000001, "a turn about a point leaves the point"),
-      match Tumble.Mat4.project(vp, cam.target) do
+      match Arcade.Mat4.project(vp, cam.target) do
       Some(c) -> all([near(c.x, 0.0, 0.000000000001, "what the camera looks at is at the middle of the screen, x"), near(c.y, 0.0, 0.000000000001, "and y")])
       None -> Mismatch("the camera's target is behind it")
       end,
-      expect(Option.is_none(Tumble.Mat4.project(vp, Arcade.Vec3.add(cam.eye, Arcade.Vec3.vec3(0.0, -1.0, 1.0)))), "a point behind the camera does not project"),
+      expect(Option.is_none(Arcade.Mat4.project(vp, Arcade.Vec3.add(cam.eye, Arcade.Vec3.vec3(0.0, -1.0, 1.0)))), "a point behind the camera does not project"),
       expect(downhill.z < 0.0 && uphill.z > 0.0, "tilted right, the floor to the right of the ball is lower and to the left higher"),
       near(downhill.z, -0.196116135138, 0.000000001, "by the lean: 0.2 a metre, on the slope"),
-      expect_int(List.length(Tumble.Cel.frame_floats(Tumble.Scene.empty(st, 1.5))), 30, "a frame is thirty floats"),
-      expect_int(List.length(Tumble.Cel.item_floats(Tumble.Cel.item(1, w, 0.03))), 22, "an item is twenty-two")
+      expect_int(List.length(Arcade.Cel.frame_floats(Tumble.Scene.empty(st, 1.5))), 30, "a frame is thirty floats"),
+      expect_int(List.length(Arcade.Cel.item_floats(Arcade.Cel.item(1, w, 0.03))), 22, "an item is twenty-two")
     ])
   end
 
@@ -381,7 +327,6 @@ mod Tumble.Suite.App do
       case("keys and the stick", fn () -> case_input()),
       case("the overlay", fn () -> case_overlay()),
       case("the tone is banded", fn () -> case_tone_is_banded()),
-      case("meshes face out", fn () -> case_meshes_face_out()),
       case("the board's mesh", fn () -> case_board_mesh()),
       case("matrices", fn () -> case_matrices())
     ]
