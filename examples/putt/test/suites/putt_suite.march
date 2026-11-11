@@ -747,6 +747,7 @@ mod Putt.Suite.Game do
     CvFill(r) -> Arcade.Test.Digest.int(Arcade.Test.Digest.int(h, 13), rule_rank(r))
     CvClip(r) -> Arcade.Test.Digest.int(Arcade.Test.Digest.int(h, 14), rule_rank(r))
     CvFillRect(a, b, cc, d) -> floats(Arcade.Test.Digest.int(h, 15), [a, b, cc, d])
+    CvClearRect(a, b, cc, d) -> floats(Arcade.Test.Digest.int(h, 25), [a, b, cc, d])
     CvStrokeStyle(s) -> Arcade.Test.Digest.text(Arcade.Test.Digest.int(h, 16), s)
     CvLineWidth(w) -> Arcade.Test.Digest.float(Arcade.Test.Digest.int(h, 17), w)
     CvLineCap(s) -> Arcade.Test.Digest.text(Arcade.Test.Digest.int(h, 18), s)
