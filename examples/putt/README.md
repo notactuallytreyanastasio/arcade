@@ -79,15 +79,20 @@ Par 27. Every hole is a walled rectangle; `Putt.Course.holes()` is the list.
 | 8 | Causeway | 3 | 3.6 x 7.2 | A 0.6 m causeway between two ponds, a third pond 0.6 m behind the cup, and three times the wind. |
 | 9 | Home | 4 | 4.2 x 7.2 | Three legs round two walls: water past the first gap, sand on the line to the second, then along a slope that runs up to water, the cup on it. |
 
+The ball is 0.045 m in radius and the cup 0.1 m, about twice a real one's.
+The first hole is drawn at 640 / 7 pixels a metre on a 360 x 640 screen, so
+a real ball's 0.021 m was a disc of radius 1.9 pixels; it is now 4.1, and
+the cup 9.1.
+
 Every hole can be holed: the suite's bot rolls a ring of 48 directions at 8
 powers with `Putt.Roll.roll` before each stroke, refines round the best, and
-holes all nine at par or better under two seeds' winds (14 strokes for
-seed 2026, 13 for seed 7), the same game on native and JS. The suite also checks each hole is
+holes all nine at par or better under two seeds' winds (13 strokes for
+seed 2026, 14 for seed 7), the same game on native and JS. The suite also checks each hole is
 sound (tee and cup on open green, boxes inside the hole, slopes and gusted
 wind together under the green's drag so a ball always rests, a way round to
 the cup) and pins the card of a plain player who putts at the next corner
-with flat-green pace and reads nothing: 2 3 3 2, picked up on Pond and Chicane, 3 on Sidehill, picked
-up on Causeway and Home, 37 strokes for seed 2026.
+with flat-green pace and reads nothing: 2 3 3 2, picked up on Pond and Chicane, 2 on Sidehill, 1 on
+Causeway, picked up on Home, 31 strokes for seed 2026.
 
 Not checked by anything: the pars, and how the holes play by hand. The pars
 were set from the layouts and from simulated players (in the commit that

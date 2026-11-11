@@ -82,8 +82,8 @@ mod Putt.Roll do
     {
       dt: 0.00390625,
       max_time: 20.0,
-      ball_radius: 0.021,
-      cup_radius: 0.06,
+      ball_radius: 0.045,
+      cup_radius: 0.1,
       capture_speed: 1.25,
       rest_speed: 0.02,
       green_drag: 0.6,
