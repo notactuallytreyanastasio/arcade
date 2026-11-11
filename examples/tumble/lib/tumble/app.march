@@ -1,0 +1,485 @@
+mod Tumble.App do
+
+  -- The whole program as a value: a model, the messages the outside world
+  -- can send it, and `update`, which answers a message with the next model
+  -- and a list of effects to carry out. Nothing here does anything: an
+  -- effect is a description (play these cues, upload this mesh, buzz), and
+  -- the frame to draw is two more values, a Tumble.Cel frame for the 3D
+  -- picture and Arcade.Draw ops for the overlay. The module is `cap pure`,
+  -- so the compiler holds it to that; the browser shell is the only code in
+  -- the game that needs a capability, and it decides nothing.
+  cap pure
+
+  import Arcade.Vec2
+
+  type TumbleKey = KeyLeft | KeyRight | KeyUp | KeyDown | KeyGo
+
+  -- Times are seconds on the shell's clock; places are CSS pixels.
+  type TumbleMsg =
+    TmTick(Float)
+    | TmResize(Float, Float)
+    | TmDown(Vec2)
+    | TmMove(Vec2)
+    | TmUp(Vec2)
+    | TmCancel
+    | TmKey(TumbleKey, Bool)
+    | TmVisible(Bool)
+
+  type TumbleFx =
+    FxAudio(List(AudioCmd(TumbleCue)))
+    | FxMeshes(List(CelMesh))
+    | FxBuzz(Int)
+
+  -- What is on screen: nothing yet; the reels of a spin made at `began`; the
+  -- round, started at `began`; the card of a round ended at `began`; or a
+  -- refused spin.
+  type TumbleShow =
+    ShowTitle
+    | ShowReels(Float)
+    | ShowPlay(Float)
+    | ShowCard(Float)
+    | ShowJam
+
+  -- A pointer held down: where it pressed and where it is. While a round is
+  -- played it is a stick: the tilt is how far it has been dragged.
+  type TumbleStick = { pressed : Vec2, now : Vec2 }
+
+  type TumbleKeys = { left : Bool, right : Bool, up : Bool, down : Bool }
+
+  -- `last` is the time of the last tick, or negative when there was none to
+  -- measure from (at launch, and after the page was hidden). `owed` is the
+  -- simulated time not yet stepped. `hum` is the rumble level last sent.
+  type TumbleModel = {
+    rs : TumbleRules,
+    sight : TumbleSight,
+    timing : HudTiming,
+    game : TumbleState,
+    view_w : Float,
+    view_h : Float,
+    show : TumbleShow,
+    now : Float,
+    last : Float,
+    owed : Float,
+    stick : Option(TumbleStick),
+    keys : TumbleKeys,
+    pose : TumblePose,
+    hum : Float,
+    rounds : Int
+  }
+
+  doc """How far a drag is a full tilt, in CSS pixels."""
+  fn full_drag() : Float needs () do
+    70.0
+  end
+
+  doc """The model at launch, and the effect that uploads the meshes that never change."""
+  fn boot(w : Float, h : Float, seed : U64) : (TumbleModel, List(TumbleFx)) needs () do
+    let rs = Tumble.Rules.rules()
+    let m =
+      {
+        rs: rs,
+        sight: Tumble.Scene.sight(),
+        timing: Tumble.Hud.timing(),
+        game: Tumble.Rules.new_game(rs, seed),
+        view_w: w,
+        view_h: h,
+        show: ShowTitle,
+        now: 0.0,
+        last: -1.0,
+        owed: 0.0,
+        stick: None,
+        keys: { left: false, right: false, up: false, down: false },
+        pose: Tumble.Scene.pose_at(zero()),
+        hum: 0.0,
+        rounds: 0
+      }
+    with_fx(m, [FxMeshes(Tumble.Scene.fixed_meshes())])
+  end
+
+  -- A model and its effects. Written as a call because a line that opens
+  -- with a parenthesis after a record literal is read as applying the record.
+  pfn with_fx(m : TumbleModel, effects : List(TumbleFx)) : (TumbleModel, List(TumbleFx)) needs () do
+    (m, effects)
+  end
+
+  pfn quiet(m : TumbleModel) : (TumbleModel, List(TumbleFx)) needs () do
+    (m, [])
+  end
+
+  doc """One message."""
+  fn update(m : TumbleModel, x : TumbleMsg) : (TumbleModel, List(TumbleFx)) needs () do
+    match x do
+    TmTick(t) -> tick(m, t)
+    TmResize(w, h) -> quiet({ m with view_w: w, view_h: h })
+    TmDown(at) -> quiet({ m with stick: Some({ pressed: at, now: at }) })
+    TmMove(at) -> quiet(dragged(m, at))
+    TmUp(at) -> lifted(dragged(m, at))
+    TmCancel -> quiet({ m with stick: None })
+    TmKey(k, held) -> keyed(m, k, held)
+    TmVisible(_) -> quiet({ m with last: -1.0, stick: None, keys: { left: false, right: false, up: false, down: false } })
+    end
+  end
+
+  -- ---- Input ----
+  doc """The key a KeyboardEvent.code is, if the game uses it: the arrows or WASD to tilt, space or Enter to go."""
+  fn key_of(code : String) : Option(TumbleKey) needs () do
+    match code do
+    "ArrowLeft" -> Some(KeyLeft)
+    "KeyA" -> Some(KeyLeft)
+    "ArrowRight" -> Some(KeyRight)
+    "KeyD" -> Some(KeyRight)
+    "ArrowUp" -> Some(KeyUp)
+    "KeyW" -> Some(KeyUp)
+    "ArrowDown" -> Some(KeyDown)
+    "KeyS" -> Some(KeyDown)
+    "Space" -> Some(KeyGo)
+    "Enter" -> Some(KeyGo)
+    _ -> None
+    end
+  end
+
+  pfn dragged(m : TumbleModel, at : Vec2) : TumbleModel needs () do
+    match m.stick do
+    None -> m
+    Some(s) -> { m with stick: Some({ s with now: at }) }
+    end
+  end
+
+  pfn lifted(m : TumbleModel) : (TumbleModel, List(TumbleFx)) needs () do
+    match m.stick do
+    None -> quiet(m)
+    Some(_) -> pressed_go({ m with stick: None })
+    end
+  end
+
+  pfn keyed(m : TumbleModel, k : TumbleKey, held : Bool) : (TumbleModel, List(TumbleFx)) needs () do
+    let ks = m.keys
+    match k do
+    KeyLeft -> quiet({ m with keys: { ks with left: held } })
+    KeyRight -> quiet({ m with keys: { ks with right: held } })
+    KeyUp -> quiet({ m with keys: { ks with up: held } })
+    KeyDown -> quiet({ m with keys: { ks with down: held } })
+    KeyGo -> if held do pressed_go(m) else quiet(m) end
+    end
+  end
+
+  pfn axis(minus : Bool, plus : Bool) : Float needs () do
+    (if plus do 1.0 else 0.0 end) -. (if minus do 1.0 else 0.0 end)
+  end
+
+  doc """
+  The tilt the player is asking for, in the unit disc: the held arrow keys,
+  plus the stick's drag over full_drag (screen down is board -y).
+  """
+  fn wanted(m : TumbleModel) : Vec2 needs () do
+    let keys = vec2(axis(m.keys.left, m.keys.right), axis(m.keys.down, m.keys.up))
+    let drag =
+      match m.stick do
+      None -> zero()
+      Some(s) -> vec2((s.now.x -. s.pressed.x) /. full_drag(), (s.pressed.y -. s.now.y) /. full_drag())
+      end
+    Tumble.Roll.in_disc(add(keys, drag))
+  end
+
+  -- A tap, or the go key. On the title, a card that has waited long enough
+  -- or a jam it spins; anywhere else it does nothing.
+  pfn pressed_go(m : TumbleModel) : (TumbleModel, List(TumbleFx)) needs () do
+    match m.show do
+    ShowTitle -> spin(m)
+    ShowJam -> spin(m)
+    ShowCard(began) -> if m.now -. began >= m.timing.card_wait do spin(m) else quiet(m) end
+    ShowReels(_) -> quiet(m)
+    ShowPlay(_) -> quiet(m)
+    end
+  end
+
+  -- A finished game is replaced by a new one, seeded from the old one's
+  -- generator, before the spin.
+  pfn fresh(m : TumbleModel) : TumbleState needs () do
+    match m.game.phase do
+    TumbleOver(_, _) -> do
+      let (seed, _) = Arcade.Rng.next(m.game.rng)
+      Tumble.Rules.new_game(m.rs, seed)
+    end
+    TumbleIdle -> m.game
+    TumbleLive(_) -> m.game
+    TumbleWon(_, _) -> m.game
+    TumbleLost(_, _) -> m.game
+    end
+  end
+
+  pfn spin(m : TumbleModel) : (TumbleModel, List(TumbleFx)) needs () do
+    match Tumble.Rules.play(m.rs, TumbleSpinReels, fresh(m)) do
+    Err(_) -> quiet({ m with show: ShowJam })
+    Ok(turn) -> do
+      match turn.after.phase do
+      TumbleLive(r) -> do
+        let board = Tumble.Course.board(r.course)
+        let spun =
+          {
+            m with game: turn.after,
+            show: ShowReels(m.now),
+            owed: 0.0,
+            pose: Tumble.Scene.pose_at(Tumble.Board.start(board)),
+            rounds: m.rounds + 1
+          }
+        with_fx(spun, [FxMeshes([Tumble.Scene.board_mesh(m.sight, m.rs.tune, board, r.mods.slick)]), FxAudio([CmdRumble(0.0)])])
+      end
+      _ -> quiet({ m with show: ShowJam })
+      end
+    end
+    end
+  end
+
+  -- ---- Time ----
+  pfn tick(m0 : TumbleModel, t : Float) : (TumbleModel, List(TumbleFx)) needs () do
+    let dt = if m0.last < 0.0 do 0.0 else Arcade.Num.clamp(t -. m0.last, 0.0, longest_frame()) end
+    let m = { m0 with now: t, last: t }
+    match m.show do
+    ShowTitle -> quiet(m)
+    ShowJam -> quiet(m)
+    ShowCard(_) -> quiet(m)
+    ShowReels(began) -> reeling(m, m0.now -. began, t -. began)
+    ShowPlay(_) -> playing(m, dt)
+    end
+  end
+
+  -- The cues of the reels that stop after `from` and by `upto` seconds.
+  pfn reel_cues(stops : List(Float), i : Int, from : Float, upto : Float) : List(AudioCmd(TumbleCue)) needs () do
+    match stops do
+    Nil -> []
+    Cons(s, rest) -> do
+      if s > from && s <= upto do
+        Cons(CmdPlay(CueReel(i)), reel_cues(rest, i + 1, from, upto))
+      else
+        reel_cues(rest, i + 1, from, upto)
+      end
+    end
+    end
+  end
+
+  pfn last_stop(stops : List(Float), seen : Float) : Float needs () do
+    match stops do
+    Nil -> seen
+    Cons(s, rest) -> last_stop(rest, s)
+    end
+  end
+
+  pfn jackpot_now(m : TumbleModel, from : Float, upto : Float) : List(AudioCmd(TumbleCue)) needs () do
+    let at = last_stop(m.timing.stops, 0.0) +. 0.2
+    match Tumble.Rules.round_of(m.game) do
+    Some(r) -> if Tumble.Power.jackpot(r.reels) && at > from && at <= upto do [CmdPlay(CueJackpot)] else [] end
+    None -> []
+    end
+  end
+
+  pfn reeling(m : TumbleModel, from : Float, upto : Float) : (TumbleModel, List(TumbleFx)) needs () do
+    let stops = List.append(reel_cues(m.timing.stops, 0, from, upto), jackpot_now(m, from, upto))
+    if upto >= m.timing.go do
+      ({ m with show: ShowPlay(m.now), owed: 0.0 }, [FxAudio(List.append(stops, [CmdPlay(CueGo)]))])
+    else
+      if List.is_empty(stops) do quiet(m) else (m, [FxAudio(stops)]) end
+    end
+  end
+
+  doc """The most time one frame plays, in seconds: a frame later than this drops the rest, so a stall is a pause and not a lurch."""
+  fn longest_frame() : Float needs () do
+    0.1
+  end
+
+  -- One frame of a round: the tilt asked for is held, the steps the frame
+  -- owes are played, the picture's pose follows the ball, and what the
+  -- steps told becomes sound.
+  pfn playing(m : TumbleModel, dt : Float) : (TumbleModel, List(TumbleFx)) needs () do
+    let sim = m.rs.tune.dt
+    let owed = m.owed +. dt
+    let n = float_floor(owed /. sim)
+    if n < 1 do
+      quiet({ m with owed: owed })
+    else
+      match Tumble.Rules.play(m.rs, TumbleSteer(wanted(m)), m.game) do
+      Err(_) -> quiet({ m with owed: 0.0 })
+      Ok(held) -> do
+        match Tumble.Rules.play(m.rs, TumbleStep(n), held.after) do
+        Err(_) -> quiet({ m with owed: 0.0 })
+        Ok(turn) -> played(m, turn, Arcade.Num.min_float(owed -. int_to_float(n) *. sim, sim), int_to_float(n) *. sim)
+        end
+      end
+      end
+    end
+  end
+
+  pfn ball_of(s : TumbleState) : Option(TumbleBall) needs () do
+    match Tumble.Rules.round_of(s) do
+    Some(r) -> Some(r.run.ball)
+    None -> None
+    end
+  end
+
+  pfn radius_of(m : TumbleModel, s : TumbleState) : Float needs () do
+    match Tumble.Rules.round_of(s) do
+    Some(r) -> m.rs.tune.ball_radius *. r.mods.size
+    None -> m.rs.tune.ball_radius
+    end
+  end
+
+  pfn has_post(told : List(TumbleEvent)) : Bool needs () do
+    List.any(told, fn e ->
+      match e do
+      TumbleMet(x) -> Tumble.Roll.bump_rank(x.ev) == 0
+      _ -> false
+      end
+    )
+  end
+
+  pfn end_cue(s : TumbleState) : List(AudioCmd(TumbleCue)) needs () do
+    match s.phase do
+    TumbleWon(r, _) -> [CmdPlay(CueClear(r.mods.payout > 1))]
+    _ -> []
+    end
+  end
+
+  pfn played(m : TumbleModel, turn : TumbleTurn, owed : Float, took : Float) : (TumbleModel, List(TumbleFx)) needs () do
+    let pose =
+      match (ball_of(m.game), ball_of(turn.after)) do
+      (Some(before), Some(after)) -> Tumble.Scene.moved(m.pose, before, after, radius_of(m, turn.after), took)
+      (_, _) -> m.pose
+      end
+    let live =
+      match turn.after.phase do
+      TumbleLive(r) -> Some(r)
+      _ -> None
+      end
+    let hum =
+      match live do
+      Some(r) -> do
+        match r.run.fate do
+        FateRolling -> Tumble.Cues.rumble_of(length(r.run.ball.vel))
+        _ -> 0.0
+        end
+      end
+      None -> 0.0
+      end
+    let hummed = if hum != m.hum do [CmdRumble(hum)] else [] end
+    let sounds = List.concat([hummed, Tumble.Cues.audio(turn.told), end_cue(turn.after)])
+    let buzz = if has_post(turn.told) do [FxBuzz(12)] else [] end
+    let show =
+      match live do
+      Some(_) -> m.show
+      None -> ShowCard(m.now)
+      end
+    let next = { m with game: turn.after, owed: owed, pose: pose, hum: hum, show: show }
+    if List.is_empty(sounds) do (next, buzz) else (next, Cons(FxAudio(sounds), buzz)) end
+  end
+
+  -- ---- What to draw ----
+  doc """The 3D picture: the round's frame, or the empty sky before the first spin."""
+  fn picture(m : TumbleModel) : CelFrame needs () do
+    let aspect = Arcade.Camera.aspect(Arcade.Camera.viewport(m.view_w, m.view_h))
+    match Tumble.Rules.round_of(m.game) do
+    Some(r) -> Tumble.Scene.frame(m.sight, m.rs.tune.ball_radius *. r.mods.size, r.run, m.pose, aspect)
+    None -> Tumble.Scene.empty(m.sight, aspect)
+    end
+  end
+
+  doc """What the overlay is showing."""
+  fn moment(m : TumbleModel) : HudMoment needs () do
+    match m.show do
+    ShowTitle -> HudTitle
+    ShowJam -> HudJam
+    ShowReels(began) -> HudReels(m.now -. began)
+    ShowPlay(began) -> HudPlay(m.now -. began)
+    ShowCard(began) -> HudCard(m.now -. began)
+    end
+  end
+
+  doc """The round's seconds left, when there is a round."""
+  fn time_left(m : TumbleModel) : Option(Float) needs () do
+    match Tumble.Rules.round_of(m.game) do
+    Some(r) -> Some(Tumble.Rules.time_left(m.rs, r))
+    None -> None
+    end
+  end
+
+  doc """The overlay's ops."""
+  fn overlay(m : TumbleModel) : List(DrawOp) needs () do
+    Tumble.Hud.frame(m.timing, Arcade.Camera.viewport(m.view_w, m.view_h), m.game, moment(m), time_left(m))
+  end
+
+  -- ---- Marks ----
+  pfn num(x : Float) : String needs () do
+    Arcade.Draw.css_number(x)
+  end
+
+  pfn place(p : Vec2) : String needs () do
+    num(p.x) ++ "," ++ num(p.y)
+  end
+
+  fn show_name(s : TumbleShow) : String needs () do
+    match s do
+    ShowTitle -> "title"
+    ShowJam -> "jam"
+    ShowReels(_) -> "reels"
+    ShowPlay(_) -> "play"
+    ShowCard(_) -> "card"
+    end
+  end
+
+  fn phase_name(p : TumblePhase) : String needs () do
+    match p do
+    TumbleIdle -> "idle"
+    TumbleLive(_) -> "live"
+    TumbleWon(_, _) -> "won"
+    TumbleLost(_, _) -> "lost"
+    TumbleOver(_, _) -> "over"
+    end
+  end
+
+  pfn round_marks(m : TumbleModel) : List((String, String)) needs () do
+    match Tumble.Rules.round_of(m.game) do
+    None -> do
+      [("data-powers", ""), ("data-ball", ""), ("data-gate", ""), ("data-left", ""), ("data-bot", ""), ("data-fate", ""), ("data-tilt", "")]
+    end
+    Some(r) -> do
+      let c = Tumble.Rules.court(m.rs, r)
+      let bot = Tumble.Roll.in_disc(Tumble.Bot.steer(Tumble.Bot.tuning(), c, r.run))
+      [
+        ("data-powers", String.join(List.map(Tumble.Power.powers(r.reels), Tumble.Power.name), ",")),
+        ("data-ball", place(r.run.ball.at)),
+        ("data-gate", place(Tumble.Board.gate(c.board))),
+        ("data-left", num(Tumble.Rules.time_left(m.rs, r))),
+        ("data-bot", place(bot)),
+        ("data-fate", int_to_string(Tumble.Roll.fate_rank(r.run.fate))),
+        ("data-tilt", place(r.run.ball.tilt))
+      ]
+    end
+    end
+  end
+
+  pfn rgb(c : Rgba) : String needs () do
+    int_to_string(c.red) ++ "/" ++ int_to_string(c.green) ++ "/" ++ int_to_string(c.blue)
+  end
+
+  -- The look, for a playtest that reads the picture's pixels: the mesh
+  -- colours, the tones (thousandths), the sky and the ink.
+  pfn look_marks() : List((String, String)) needs () do
+    let look = Tumble.Scene.look()
+    [
+      ("data-palette", String.join(List.map(Tumble.Scene.palette(), rgb), ",")),
+      ("data-tones", String.join(List.map(Tumble.Cel.tones(look), fn t -> int_to_string(float_round(t *. 1000.0))), ",")),
+      ("data-sky", rgb(look.sky)),
+      ("data-ink", rgb(look.ink))
+    ]
+  end
+
+  doc """
+  What a playtest reads off <html>: what is shown, the phase, level, lives,
+  score and rounds spun; and of the round: its powers, the ball and the
+  gate in board metres, the seconds left, the tilt Tumble.Bot would hold
+  now, the ball's fate and the floor's tilt; and the look (look_marks).
+  """
+  fn marks(m : TumbleModel) : List((String, String)) needs () do
+    List.append([("data-show", show_name(m.show)), ("data-phase", phase_name(m.game.phase)), ("data-level", int_to_string(m.game.level)), ("data-lives", int_to_string(m.game.lives)), ("data-score", int_to_string(m.game.score)), ("data-rounds", int_to_string(m.rounds)), ("data-headline", Tumble.Hud.headline(m.game))], List.append(round_marks(m), look_marks()))
+  end
+
+end

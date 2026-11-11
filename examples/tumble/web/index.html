@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#2b2540">
+<meta name="color-scheme" content="dark">
+<title>Tumble: tilt the floor, on the arcade engine</title>
+<meta name="description" content="Tumble: tilt the floor and roll the ball to the gate, under three powers a slot machine deals each round. Cel-shaded 3D, built on arcade, a game engine for March.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%232b2540'/%3E%3Ccircle cx='8' cy='8' r='4.5' fill='%23ff7a59' stroke='%231a1423' stroke-width='1.5'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<!-- Two canvases, one over the other. "stage" is the 3D picture (Tumble.Cel,
+     drawn by tumble_gl.mjs with WebGL). "hud" lies over it and is clear
+     where it draws nothing: the overlay (Tumble.Hud, painted by
+     Arcade.Web.Paint), and the one that takes the pointer. -->
+<canvas id="stage"></canvas>
+<canvas id="hud"></canvas>
+<nav id="chrome" aria-label="About this page">
+  <a href="../" title="The arcade engine">arcade</a>
+  <h1>Tumble</h1>
+  <a href="https://github.com/notactuallytreyanastasio/arcade/tree/main/examples/tumble">source</a>
+</nav>
+<noscript><p id="noscript">Tumble is drawn by JavaScript on a canvas; it needs JavaScript turned on.</p></noscript>
+<script type="module" src="tumble.mjs"></script>
+</body>
+</html>

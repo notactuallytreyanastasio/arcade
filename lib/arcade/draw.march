@@ -95,8 +95,11 @@ mod Arcade.Draw do
 
   derive Show for Lettering
 
+  -- Wipe clears the whole surface to transparent, where ClearTo paints it
+  -- a colour: a canvas laid over something else starts its frame with Wipe.
   type DrawOp =
     ClearTo(Rgba)
+    | Wipe
     | FillShape(Shape, Paint, Blend)
     | StrokeShape(Shape, Pen, Blend)
     | DrawText(Lettering)

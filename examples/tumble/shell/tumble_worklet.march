@@ -1,0 +1,12 @@
+mod TumbleWorklet do
+
+  -- The entry point of the audio worklet's build
+  -- (dist/tumble_synth_worklet.mjs), loaded by AudioWorklet.addModule in its
+  -- own realm.
+  needs IO.Foreign
+
+  fn main(_f : Cap(IO.Foreign)) : () do
+    Arcade.Web.SynthWorklet.register(TumbleNames.processor(), Arcade.Synth.rate(), fn () -> Arcade.Web.SynthHost.reset(), fn cmds -> Arcade.Web.SynthHost.serve(Tumble.Cues.voices, cmds))
+  end
+
+end

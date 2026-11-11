@@ -1,0 +1,256 @@
+mod Tumble.Mat4 do
+
+  -- 4x4 matrices for placing and projecting 3D things, column-major as WebGL
+  -- takes them: field mCR is column C, row R, and `floats` lists them column
+  -- by column. A point is a column vector, so mul(a, b) applies b first.
+  -- Rotations are built from unit vectors and cross products, never from an
+  -- angle: no sin or cos, so a matrix is the same bits on every target.
+  cap pure
+
+  import Arcade.Vec3
+
+  type Mat4 = {
+    m00 : Float,
+    m01 : Float,
+    m02 : Float,
+    m03 : Float,
+    m10 : Float,
+    m11 : Float,
+    m12 : Float,
+    m13 : Float,
+    m20 : Float,
+    m21 : Float,
+    m22 : Float,
+    m23 : Float,
+    m30 : Float,
+    m31 : Float,
+    m32 : Float,
+    m33 : Float
+  }
+
+  fn identity() : Mat4 needs () do
+    {
+      m00: 1.0,
+      m01: 0.0,
+      m02: 0.0,
+      m03: 0.0,
+      m10: 0.0,
+      m11: 1.0,
+      m12: 0.0,
+      m13: 0.0,
+      m20: 0.0,
+      m21: 0.0,
+      m22: 1.0,
+      m23: 0.0,
+      m30: 0.0,
+      m31: 0.0,
+      m32: 0.0,
+      m33: 1.0
+    }
+  end
+
+  doc """a times b: the transform that applies b, then a."""
+  fn mul(a : Mat4, b : Mat4) : Mat4 needs () do
+    {
+      m00: a.m00 *. b.m00 +. a.m10 *. b.m01 +. a.m20 *. b.m02 +. a.m30 *. b.m03,
+      m01: a.m01 *. b.m00 +. a.m11 *. b.m01 +. a.m21 *. b.m02 +. a.m31 *. b.m03,
+      m02: a.m02 *. b.m00 +. a.m12 *. b.m01 +. a.m22 *. b.m02 +. a.m32 *. b.m03,
+      m03: a.m03 *. b.m00 +. a.m13 *. b.m01 +. a.m23 *. b.m02 +. a.m33 *. b.m03,
+      m10: a.m00 *. b.m10 +. a.m10 *. b.m11 +. a.m20 *. b.m12 +. a.m30 *. b.m13,
+      m11: a.m01 *. b.m10 +. a.m11 *. b.m11 +. a.m21 *. b.m12 +. a.m31 *. b.m13,
+      m12: a.m02 *. b.m10 +. a.m12 *. b.m11 +. a.m22 *. b.m12 +. a.m32 *. b.m13,
+      m13: a.m03 *. b.m10 +. a.m13 *. b.m11 +. a.m23 *. b.m12 +. a.m33 *. b.m13,
+      m20: a.m00 *. b.m20 +. a.m10 *. b.m21 +. a.m20 *. b.m22 +. a.m30 *. b.m23,
+      m21: a.m01 *. b.m20 +. a.m11 *. b.m21 +. a.m21 *. b.m22 +. a.m31 *. b.m23,
+      m22: a.m02 *. b.m20 +. a.m12 *. b.m21 +. a.m22 *. b.m22 +. a.m32 *. b.m23,
+      m23: a.m03 *. b.m20 +. a.m13 *. b.m21 +. a.m23 *. b.m22 +. a.m33 *. b.m23,
+      m30: a.m00 *. b.m30 +. a.m10 *. b.m31 +. a.m20 *. b.m32 +. a.m30 *. b.m33,
+      m31: a.m01 *. b.m30 +. a.m11 *. b.m31 +. a.m21 *. b.m32 +. a.m31 *. b.m33,
+      m32: a.m02 *. b.m30 +. a.m12 *. b.m31 +. a.m22 *. b.m32 +. a.m32 *. b.m33,
+      m33: a.m03 *. b.m30 +. a.m13 *. b.m31 +. a.m23 *. b.m32 +. a.m33 *. b.m33
+    }
+  end
+
+  doc """Move by v."""
+  fn translate(v : Vec3) : Mat4 needs () do
+    {
+      m00: 1.0,
+      m01: 0.0,
+      m02: 0.0,
+      m03: 0.0,
+      m10: 0.0,
+      m11: 1.0,
+      m12: 0.0,
+      m13: 0.0,
+      m20: 0.0,
+      m21: 0.0,
+      m22: 1.0,
+      m23: 0.0,
+      m30: v.x,
+      m31: v.y,
+      m32: v.z,
+      m33: 1.0
+    }
+  end
+
+  doc """Scale by k on every axis."""
+  fn scale(k : Float) : Mat4 needs () do
+    {
+      m00: k,
+      m01: 0.0,
+      m02: 0.0,
+      m03: 0.0,
+      m10: 0.0,
+      m11: k,
+      m12: 0.0,
+      m13: 0.0,
+      m20: 0.0,
+      m21: 0.0,
+      m22: k,
+      m23: 0.0,
+      m30: 0.0,
+      m31: 0.0,
+      m32: 0.0,
+      m33: 1.0
+    }
+  end
+
+  doc """The rotation whose columns are x, y and z: it takes the axes to those three vectors (unit and square to each other, or it is not a rotation)."""
+  fn basis(x : Vec3, y : Vec3, z : Vec3) : Mat4 needs () do
+    {
+      m00: x.x,
+      m01: x.y,
+      m02: x.z,
+      m03: 0.0,
+      m10: y.x,
+      m11: y.y,
+      m12: y.z,
+      m13: 0.0,
+      m20: z.x,
+      m21: z.y,
+      m22: z.z,
+      m23: 0.0,
+      m30: 0.0,
+      m31: 0.0,
+      m32: 0.0,
+      m33: 1.0
+    }
+  end
+
+  doc """
+  The rotation that stands the z axis along `n` (unit) with the least turn
+  of x: x goes to the part of the x axis square to n. Undefined for n along
+  x; a floor's normal never is.
+  """
+  fn stand_on(n : Vec3) : Mat4 needs () do
+    let x = normalized(sub(vec3(1.0, 0.0, 0.0), Arcade.Vec3.scale(n, n.x)))
+    basis(x, cross(n, x), n)
+  end
+
+  doc """
+  The rotation about the unit axis `a` by the angle whose half has tangent
+  `t`: for a small angle x, t is x / 2. Built from t alone (cos is
+  (1 - t^2) / (1 + t^2), sin 2t / (1 + t^2)), so it is a rotation exactly.
+  """
+  fn turn(a : Vec3, t : Float) : Mat4 needs () do
+    let d = 1.0 +. t *. t
+    let c = (1.0 -. t *. t) /. d
+    let s = 2.0 *. t /. d
+    let k = 1.0 -. c
+    basis(vec3(c +. k *. a.x *. a.x, k *. a.x *. a.y +. s *. a.z, k *. a.x *. a.z -. s *. a.y), vec3(k *. a.x *. a.y -. s *. a.z, c +. k *. a.y *. a.y, k *. a.y *. a.z +. s *. a.x), vec3(k *. a.x *. a.z +. s *. a.y, k *. a.y *. a.z -. s *. a.x, c +. k *. a.z *. a.z))
+  end
+
+  doc """
+  A rotation squared up again: its x column made unit, y made square to it,
+  z their cross. For one that is multiplied into every frame and drifts.
+  """
+  fn squared(m : Mat4) : Mat4 needs () do
+    let x = normalized(vec3(m.m00, m.m01, m.m02))
+    let y0 = vec3(m.m10, m.m11, m.m12)
+    let y = normalized(sub(y0, Arcade.Vec3.scale(x, dot(x, y0))))
+    basis(x, y, cross(x, y))
+  end
+
+  doc """m about the point p instead of the origin."""
+  fn about(p : Vec3, m : Mat4) : Mat4 needs () do
+    mul(translate(p), mul(m, translate(Arcade.Vec3.scale(p, -1.0))))
+  end
+
+  doc """
+  The view matrix of a camera at `eye` with unit axes forward f, right r and
+  up u (Arcade.Camera.basis gives them): world to camera space, the camera
+  looking down its own -z as WebGL has it.
+  """
+  fn view(eye : Vec3, f : Vec3, r : Vec3, u : Vec3) : Mat4 needs () do
+    {
+      m00: r.x,
+      m01: u.x,
+      m02: 0.0 -. f.x,
+      m03: 0.0,
+      m10: r.y,
+      m11: u.y,
+      m12: 0.0 -. f.y,
+      m13: 0.0,
+      m20: r.z,
+      m21: u.z,
+      m22: 0.0 -. f.z,
+      m23: 0.0,
+      m30: 0.0 -. dot(r, eye),
+      m31: 0.0 -. dot(u, eye),
+      m32: dot(f, eye),
+      m33: 1.0
+    }
+  end
+
+  doc """
+  A perspective projection: `half` is tan(fov / 2) of the vertical field of
+  view, `aspect` width over height, near and far the clip distances.
+  """
+  fn perspective(half : Float, aspect : Float, near : Float, far : Float) : Mat4 needs () do
+    {
+      m00: 1.0 /. (half *. aspect),
+      m01: 0.0,
+      m02: 0.0,
+      m03: 0.0,
+      m10: 0.0,
+      m11: 1.0 /. half,
+      m12: 0.0,
+      m13: 0.0,
+      m20: 0.0,
+      m21: 0.0,
+      m22: (far +. near) /. (near -. far),
+      m23: -1.0,
+      m30: 0.0,
+      m31: 0.0,
+      m32: 2.0 *. far *. near /. (near -. far),
+      m33: 0.0
+    }
+  end
+
+  doc """A point through m (w taken as 1, the result's w dropped): for a transform with no projection."""
+  fn point(m : Mat4, p : Vec3) : Vec3 needs () do
+    vec3(m.m00 *. p.x +. m.m10 *. p.y +. m.m20 *. p.z +. m.m30, m.m01 *. p.x +. m.m11 *. p.y +. m.m21 *. p.z +. m.m31, m.m02 *. p.x +. m.m12 *. p.y +. m.m22 *. p.z +. m.m32)
+  end
+
+  doc """
+  A point through a projecting m, divided by its w: clip space, -1...1 on
+  each axis when it is in view. None at or behind the eye's plane.
+  """
+  fn project(m : Mat4, p : Vec3) : Option(Vec3) needs () do
+    let w = m.m03 *. p.x +. m.m13 *. p.y +. m.m23 *. p.z +. m.m33
+    if w > 0.0 do
+      do
+        let q = point(m, p)
+        Some(vec3(q.x /. w, q.y /. w, q.z /. w))
+      end
+    else
+      None
+    end
+  end
+
+  doc """The sixteen numbers, column by column: what uniformMatrix4fv takes."""
+  fn floats(m : Mat4) : List(Float) needs () do
+    [m.m00, m.m01, m.m02, m.m03, m.m10, m.m11, m.m12, m.m13, m.m20, m.m21, m.m22, m.m23, m.m30, m.m31, m.m32, m.m33]
+  end
+
+end

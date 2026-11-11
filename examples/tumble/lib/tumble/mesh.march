@@ -1,0 +1,251 @@
+mod Tumble.Mesh do
+
+  -- Shapes as triangle soup for Tumble.Cel: each builder adds its triangles
+  -- to a list of floats kept newest first (twelve a vertex, reversed), and
+  -- `done` turns the list the right way round. Triangles wind anticlockwise
+  -- seen from outside. Circles come from a table of sixteen points, spheres
+  -- from an octahedron split and pushed out to the unit sphere: no sin or
+  -- cos anywhere.
+  cap pure
+
+  import Arcade.Vec3
+
+  doc """A mesh from the floats the builders left."""
+  fn done(id : Int, rev : List(Float)) : CelMesh needs () do
+    { id: id, floats: List.reverse(rev) }
+  end
+
+  pfn chan(x : Int) : Float needs () do
+    int_to_float(x) /. 255.0
+  end
+
+  doc """One vertex: position, normal, colour, rim."""
+  fn vertex(rev : List(Float), p : Vec3, n : Vec3, c : Rgba, rim : Vec3) : List(Float) needs () do
+    Cons(rim.z, Cons(rim.y, Cons(rim.x, Cons(chan(c.blue), Cons(chan(c.green), Cons(chan(c.red), Cons(n.z, Cons(n.y, Cons(n.x, Cons(p.z, Cons(p.y, Cons(p.x, rev))))))))))))
+  end
+
+  doc """The unit normal of the triangle a, b, c wound anticlockwise."""
+  fn facing(a : Vec3, b : Vec3, c : Vec3) : Vec3 needs () do
+    normalized(cross(sub(b, a), sub(c, a)))
+  end
+
+  doc """A flat triangle whose rims are given."""
+  fn tri(rev : List(Float), a : Vec3, b : Vec3, c : Vec3, col : Rgba, ra : Vec3, rb : Vec3, rc : Vec3) : List(Float) needs () do
+    let n = facing(a, b, c)
+    vertex(vertex(vertex(rev, a, n, col, ra), b, n, col, rb), c, n, col, rc)
+  end
+
+  doc """A flat quad a, b, c, d (anticlockwise from outside) as two triangles, with a rim for each corner."""
+  fn quad(rev : List(Float), a : Vec3, b : Vec3, c : Vec3, d : Vec3, col : Rgba, ra : Vec3, rb : Vec3, rc : Vec3, rd : Vec3) : List(Float) needs () do
+    tri(tri(rev, a, b, c, col, ra, rb, rc), a, c, d, col, ra, rc, rd)
+  end
+
+  -- ---- Boxes ----
+  -- Which faces of a box to build: the faces a neighbour hides are left out.
+  type BoxFaces = {
+    west : Bool,
+    east : Bool,
+    south : Bool,
+    north : Bool,
+    bottom : Bool,
+    top : Bool
+  }
+
+  fn all_faces() : BoxFaces needs () do
+    { west: true, east: true, south: true, north: true, bottom: true, top: true }
+  end
+
+  -- A corner of the box lo-hi from its code: 1 for the high x, 2 for the high
+  -- y, 4 for the high z, added.
+  pfn corner(lo : Vec3, hi : Vec3, code : Int) : Vec3 needs () do
+    vec3(if code % 2 == 1 do hi.x else lo.x end, if code / 2 % 2 == 1 do hi.y else lo.y end, if code / 4 == 1 do hi.z else lo.z end)
+  end
+
+  -- A corner's rim: out along the diagonal, so the outline of a box keeps
+  -- its corners closed.
+  pfn diag(code : Int) : Vec3 needs () do
+    let k = 0.57735026919
+    vec3(if code % 2 == 1 do k else 0.0 -. k end, if code / 2 % 2 == 1 do k else 0.0 -. k end, if code / 4 == 1 do k else 0.0 -. k end)
+  end
+
+  pfn face(rev : List(Float), lo : Vec3, hi : Vec3, col : Rgba, a : Int, b : Int, c : Int, d : Int) : List(Float) needs () do
+    quad(rev, corner(lo, hi, a), corner(lo, hi, b), corner(lo, hi, c), corner(lo, hi, d), col, diag(a), diag(b), diag(c), diag(d))
+  end
+
+  doc """
+  The box lo-hi: the faces asked for, the top in `top` and the rest in
+  `side`. Rims run along the corners' diagonals.
+  """
+  fn box(rev : List(Float), lo : Vec3, hi : Vec3, top : Rgba, side : Rgba, f : BoxFaces) : List(Float) needs () do
+    let r1 = if f.top do face(rev, lo, hi, top, 4, 5, 7, 6) else rev end
+    let r2 = if f.bottom do face(r1, lo, hi, side, 0, 2, 3, 1) else r1 end
+    let r3 = if f.south do face(r2, lo, hi, side, 0, 1, 5, 4) else r2 end
+    let r4 = if f.north do face(r3, lo, hi, side, 3, 2, 6, 7) else r3 end
+    let r5 = if f.west do face(r4, lo, hi, side, 2, 0, 4, 6) else r4 end
+    if f.east do face(r5, lo, hi, side, 1, 3, 7, 5) else r5 end
+  end
+
+  -- ---- Circles ----
+  doc """
+  Sixteen points round the unit circle, anticlockwise from (1, 0), as
+  (x, y) pairs: cos and sin of every 22.5 degrees, written out.
+  """
+  fn ring16() : List((Float, Float)) needs () do
+    let c = 0.923879532511
+    let s = 0.382683432365
+    let h = 0.707106781187
+    [
+      (1.0, 0.0),
+      (c, s),
+      (h, h),
+      (s, c),
+      (0.0, 1.0),
+      (0.0 -. s, c),
+      (0.0 -. h, h),
+      (0.0 -. c, s),
+      (-1.0, 0.0),
+      (0.0 -. c, 0.0 -. s),
+      (0.0 -. h, 0.0 -. h),
+      (0.0 -. s, 0.0 -. c),
+      (0.0, -1.0),
+      (s, 0.0 -. c),
+      (h, 0.0 -. h),
+      (c, 0.0 -. s)
+    ]
+  end
+
+  -- One side of a post and its slice of the cap, between ring points a and b.
+  pfn post_side(rev : List(Float), at : Vec3, radius : Float, height : Float, a : (Float, Float), b : (Float, Float), side : Rgba, cap : Rgba) : List(Float) needs () do
+    let (a_x, a_y) = a
+    let (b_x, b_y) = b
+    let na = vec3(a_x, a_y, 0.0)
+    let nb = vec3(b_x, b_y, 0.0)
+    let a0 = add(at, Arcade.Vec3.scale(na, radius))
+    let b0 = add(at, Arcade.Vec3.scale(nb, radius))
+    let up = vec3(0.0, 0.0, height)
+    let a1 = add(a0, up)
+    let b1 = add(b0, up)
+    let top = add(at, up)
+    let k = 0.707106781187
+    let ra = vec3(a_x *. k, a_y *. k, k)
+    let rb = vec3(b_x *. k, b_y *. k, k)
+    let s1 = vertex(vertex(vertex(rev, a0, na, side, na), b0, nb, side, nb), b1, nb, side, rb)
+    let s2 = vertex(vertex(vertex(s1, a0, na, side, na), b1, nb, side, rb), a1, na, side, ra)
+    let z = vec3(0.0, 0.0, 1.0)
+    vertex(vertex(vertex(s2, top, z, cap, z), a1, z, cap, ra), b1, z, cap, rb)
+  end
+
+  pfn post_sides(rev : List(Float), at : Vec3, radius : Float, height : Float, ring : List((Float, Float)), first : (Float, Float), side : Rgba, cap : Rgba) : List(Float) needs () do
+    match ring do
+    Nil -> rev
+    Cons(a, Nil) -> post_side(rev, at, radius, height, a, first, side, cap)
+    Cons(a, Cons(b, rest)) -> do
+      post_sides(post_side(rev, at, radius, height, a, b, side, cap), at, radius, height, Cons(b, rest), first, side, cap)
+    end
+    end
+  end
+
+  doc """
+  An upright post standing on `at`: sixteen smooth sides and a flat cap.
+  It has no underside; it is meant to stand on something.
+  """
+  fn post(rev : List(Float), at : Vec3, radius : Float, height : Float, side : Rgba, cap : Rgba) : List(Float) needs () do
+    post_sides(rev, at, radius, height, ring16(), (1.0, 0.0), side, cap)
+  end
+
+  pfn disc_slices(rev : List(Float), radius : Float, ring : List((Float, Float)), first : (Float, Float), col : Rgba) : List(Float) needs () do
+    let z = vec3(0.0, 0.0, 1.0)
+    match ring do
+    Nil -> rev
+    Cons((a_x, a_y), rest) -> do
+      let (b_x, b_y) =
+        match rest do
+        Cons(b, _) -> b
+        Nil -> first
+        end
+      let slice =
+        vertex(vertex(vertex(rev, zero(), z, col, z), vec3(a_x *. radius, a_y *. radius, 0.0), z, col, z), vec3(b_x *. radius, b_y *. radius, 0.0), z, col, z)
+      disc_slices(slice, radius, rest, first, col)
+    end
+    end
+  end
+
+  doc """A flat disc in the z = 0 plane, facing +z, centred on the origin."""
+  fn disc(rev : List(Float), radius : Float, col : Rgba) : List(Float) needs () do
+    disc_slices(rev, radius, ring16(), (1.0, 0.0), col)
+  end
+
+  -- ---- Spheres ----
+  -- One triangle of the unit sphere, split `depth` more times. A sphere's
+  -- normal and rim at a point are the point.
+  pfn patch(rev : List(Float), a : Vec3, b : Vec3, c : Vec3, depth : Int, col : Rgba) : List(Float) needs () do
+    if depth <= 0 do
+      vertex(vertex(vertex(rev, a, a, col, a), b, b, col, b), c, c, col, c)
+    else
+      do
+        let ab = normalized(add(a, b))
+        let bc = normalized(add(b, c))
+        let ca = normalized(add(c, a))
+        let r1 = patch(rev, a, ab, ca, depth - 1, col)
+        let r2 = patch(r1, ab, b, bc, depth - 1, col)
+        let r3 = patch(r2, ca, bc, c, depth - 1, col)
+        patch(r3, ab, bc, ca, depth - 1, col)
+      end
+    end
+  end
+
+  pfn octant(rev : List(Float), sx : Float, sy : Float, sz : Float, depth : Int, one : Rgba, other : Rgba) : List(Float) needs () do
+    let x = vec3(sx, 0.0, 0.0)
+    let y = vec3(0.0, sy, 0.0)
+    let z = vec3(0.0, 0.0, sz)
+    if sx *. sy *. sz > 0.0 do
+      patch(rev, x, y, z, depth, one)
+    else
+      patch(rev, y, x, z, depth, other)
+    end
+  end
+
+  doc """
+  The unit sphere about the origin: an octahedron with each face split
+  `depth` times (8 times 4^depth triangles), smooth. Its eight octants are
+  coloured `one` and `other` turn about, so a rolling ball is seen to roll.
+  """
+  fn sphere(rev : List(Float), depth : Int, one : Rgba, other : Rgba) : List(Float) needs () do
+    let r1 = octant(rev, 1.0, 1.0, 1.0, depth, one, other)
+    let r2 = octant(r1, -1.0, 1.0, 1.0, depth, one, other)
+    let r3 = octant(r2, 1.0, -1.0, 1.0, depth, one, other)
+    let r4 = octant(r3, -1.0, -1.0, 1.0, depth, one, other)
+    let r5 = octant(r4, 1.0, 1.0, -1.0, depth, one, other)
+    let r6 = octant(r5, -1.0, 1.0, -1.0, depth, one, other)
+    let r7 = octant(r6, 1.0, -1.0, -1.0, depth, one, other)
+    octant(r7, -1.0, -1.0, -1.0, depth, one, other)
+  end
+
+  -- ---- Gems ----
+  pfn facet(rev : List(Float), sx : Float, sy : Float, sz : Float, wide : Float, tall : Float, col : Rgba) : List(Float) needs () do
+    let x = vec3(sx *. wide, 0.0, 0.0)
+    let y = vec3(0.0, sy *. wide, 0.0)
+    let z = vec3(0.0, 0.0, sz *. tall)
+    let rx = vec3(sx, 0.0, 0.0)
+    let ry = vec3(0.0, sy, 0.0)
+    let rz = vec3(0.0, 0.0, sz)
+    if sx *. sy *. sz > 0.0 do
+      tri(rev, x, y, z, col, rx, ry, rz)
+    else
+      tri(rev, y, x, z, col, ry, rx, rz)
+    end
+  end
+
+  doc """A flat-faced octahedron about the origin, `wide` to its side points and `tall` to its top and bottom."""
+  fn gem(rev : List(Float), wide : Float, tall : Float, col : Rgba) : List(Float) needs () do
+    let r1 = facet(rev, 1.0, 1.0, 1.0, wide, tall, col)
+    let r2 = facet(r1, -1.0, 1.0, 1.0, wide, tall, col)
+    let r3 = facet(r2, 1.0, -1.0, 1.0, wide, tall, col)
+    let r4 = facet(r3, -1.0, -1.0, 1.0, wide, tall, col)
+    let r5 = facet(r4, 1.0, 1.0, -1.0, wide, tall, col)
+    let r6 = facet(r5, -1.0, 1.0, -1.0, wide, tall, col)
+    let r7 = facet(r6, 1.0, -1.0, -1.0, wide, tall, col)
+    facet(r7, -1.0, -1.0, -1.0, wide, tall, col)
+  end
+
+end

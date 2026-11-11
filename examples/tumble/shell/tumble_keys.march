@@ -1,0 +1,15 @@
+mod TumbleKeys do
+
+  -- The keyboard, backed by tumble_keys.mjs.
+  needs IO.Foreign
+
+  extern "./tumble_keys.mjs" : Cap(IO.Foreign) do
+    fn keys_listen(heard : (String, Bool) -> ()) : Unit
+  end
+
+  doc """`heard(code, down)` for every key going down (not its auto-repeat) or coming up, by KeyboardEvent.code."""
+  fn listen(heard : (String, Bool) -> ()) : () do
+    keys_listen(heard)
+  end
+
+end

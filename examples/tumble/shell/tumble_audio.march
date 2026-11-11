@@ -1,0 +1,29 @@
+mod TumbleAudio do
+
+  -- Tumble's speakers on Arcade.Web.Audio: the synth plays Tumble.Cues
+  -- through Arcade.Web.SynthHost, in the audio worklet
+  -- (shell/tumble_worklet.march, built to dist/tumble_synth_worklet.mjs) or
+  -- on the main thread.
+  needs IO.Foreign
+
+  fn setup() : Arcade.Web.Audio.AudioSetup do
+    {
+      setup_rate: Arcade.Synth.rate(),
+      setup_gain: 0.8,
+      setup_worklet_url: "tumble_synth_worklet.mjs",
+      setup_processor: TumbleNames.processor(),
+      setup_global: TumbleNames.debug_global()
+    }
+  end
+
+  doc """Install the gesture listeners; the speakers come up on the first gesture after that."""
+  fn start() : () do
+    Arcade.Web.SynthHost.reset()
+    Arcade.Web.Audio.install(setup(), fn cmds -> Arcade.Web.SynthHost.serve(Tumble.Cues.voices, cmds))
+  end
+
+  fn route(cmds : List(AudioCmd(TumbleCue))) : () do
+    Arcade.Web.Audio.route(cmds)
+  end
+
+end
