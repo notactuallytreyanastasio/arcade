@@ -1,0 +1,362 @@
+mod Tumble.Rules do
+
+  -- The game as a pure reducer. A game is a string of rounds. Each round
+  -- starts with a spin: three reels stop on three powers, a wind is drawn, a
+  -- board is generated and Tumble.Bot must clear it under those very powers
+  -- before it is accepted (Tumble.Course); a board the bot cannot clear is
+  -- thrown away and an easier one drawn. Then the round is stepped: the
+  -- player holds the floor's tilt (TumbleSteer) and time passes in fixed
+  -- steps (TumbleStep). Reaching the gate wins the round and the next is
+  -- harder; falling off or running out of time costs a life. Every random
+  -- choice comes from the state's Arcade.Rng, so a game is its seed plus the
+  -- actions it accepted: `resume` rebuilds one with Arcade.Replay.replay.
+  cap pure
+
+  import Arcade.Vec2
+
+  type TumbleLoss = LostFell | LostTime
+
+  -- A round being played or just ended: its reels, what they add up to, its
+  -- wind, the proven course, the time allowed, the run so far and the tilt
+  -- being held.
+  type TumbleRound = {
+    reels : TumbleSpin,
+    mods : TumbleMods,
+    wind : Vec2,
+    course : TumbleCourse,
+    limit : Float,
+    run : TumbleRun,
+    steer : Vec2
+  }
+
+  -- Where a game stands. A phase holds exactly what exists in it: there is
+  -- no round before the first spin, and a won round carries what it paid.
+  type TumblePhase =
+    TumbleIdle
+    | TumbleLive(TumbleRound)
+    | TumbleWon(TumbleRound, Int)
+    | TumbleLost(TumbleRound, TumbleLoss)
+    | TumbleOver(TumbleRound, TumbleLoss)
+
+  type TumbleAction = TumbleSpinReels | TumbleSteer(Vec2) | TumbleStep(Int)
+
+  type TumbleError =
+    TumbleRoundLive
+    | TumbleNoRound
+    | TumbleGameOver
+    | TumbleBadSteps(Int)
+    | TumbleNoPlayableBoard(Int)
+
+  -- `level` counts rounds won, `ease` is how hard the next board is asked to be.
+  type TumbleState = {
+    rng : Rng,
+    seed : U64,
+    level : Int,
+    lives : Int,
+    score : Int,
+    phase : TumblePhase
+  }
+
+  -- What a spin drew before the board: the reels, what they add up to, the
+  -- wind's direction and the quake's generator.
+  type TumbleDeal = { reels : TumbleSpin, mods : TumbleMods, wind : Vec2, noise : Rng }
+
+  -- How a round's board was come by: how many boards the bot was shown, the
+  -- ease of the one it cleared (-1: the runway), and how many times the
+  -- reels were spun again because the bot cleared nothing under them.
+  type TumbleLaying = { shown : Int, ease : Int, jams : Int }
+
+  -- What a played action told: the reels and how their board was come by;
+  -- what the ball met and when, in the round's time; how the round ended.
+  type TumbleEvent =
+    TumbleSpun(TumbleSpin, TumbleLaying)
+    | TumbleMet(Timed(TumbleBump))
+    | TumbleCleared(Int, Float)
+    | TumbleDropped(Int)
+    | TumbleTimedOut(Int)
+    | TumbleEnded(Int)
+
+  type TumbleTurn = { after : TumbleState, told : List(TumbleEvent) }
+
+  -- What the rules read.
+  --   lives        a game's lives
+  --   tries        how many generated boards a spin shows the bot before the runway
+  --   jams         how many times a spin may spin its reels again
+  --   slack, spare, least, most   the round's limit is the bot's time times
+  --                slack plus spare, held to least...most, plus the Clock's
+  --   gem_time     seconds a gem adds to the round
+  type TumbleRules = {
+    num : Numerics,
+    tune : TumbleTuning,
+    lives : Int,
+    tries : Int,
+    jams : Int,
+    slack : Float,
+    spare : Float,
+    least : Float,
+    most : Float,
+    gem_time : Float,
+    max_steps : Int
+  }
+
+  fn rules() : TumbleRules needs () do
+    {
+      num: Arcade.Numerics.make(),
+      tune: Tumble.Roll.tuning(),
+      lives: 3,
+      tries: 5,
+      jams: 3,
+      slack: 2.0,
+      spare: 8.0,
+      least: 20.0,
+      most: 90.0,
+      gem_time: 2.0,
+      max_steps: 64
+    }
+  end
+
+  doc """A new game from a seed, waiting for its first spin."""
+  fn new_game(rs : TumbleRules, seed : U64) : TumbleState needs () do
+    { rng: Arcade.Rng.seed(seed), seed: seed, level: 0, lives: rs.lives, score: 0, phase: TumbleIdle }
+  end
+
+  doc """The round a state has, if any."""
+  fn round_of(s : TumbleState) : Option(TumbleRound) needs () do
+    match s.phase do
+    TumbleIdle -> None
+    TumbleLive(r) -> Some(r)
+    TumbleWon(r, _) -> Some(r)
+    TumbleLost(r, _) -> Some(r)
+    TumbleOver(r, _) -> Some(r)
+    end
+  end
+
+  doc """What a round's steps read."""
+  fn court(rs : TumbleRules, r : TumbleRound) : TumbleCourt needs () do
+    { num: rs.num, tune: rs.tune, mods: r.mods, board: Tumble.Course.board(r.course), wind: r.wind }
+  end
+
+  doc """Seconds left in a round: its limit, plus gem_time a gem, less the time rolled."""
+  fn time_left(rs : TumbleRules, r : TumbleRound) : Float needs () do
+    Arcade.Num.max_float(0.0, r.limit +. int_to_float(r.run.got) *. rs.gem_time -. r.run.clock.t)
+  end
+
+  doc """Apply one action, or say why it cannot be played now."""
+  fn play(rs : TumbleRules, a : TumbleAction, s : TumbleState) : Result(TumbleTurn, TumbleError) needs () do
+    match a do
+    TumbleSpinReels -> spin(rs, s)
+    TumbleSteer(v) -> steer(v, s)
+    TumbleStep(n) -> advance(rs, n, s)
+    end
+  end
+
+  doc """`play` without what it told: the shape Arcade.Replay folds."""
+  fn apply(rs : TumbleRules, a : TumbleAction, s : TumbleState) : Result(TumbleState, TumbleError) needs () do
+    match play(rs, a, s) do
+    Ok(turn) -> Ok(turn.after)
+    Err(why) -> Err(why)
+    end
+  end
+
+  doc """A game rebuilt from its seed and the actions it accepted."""
+  fn resume(rs : TumbleRules, seed : U64, actions : List(TumbleAction)) : (TumbleState, Int, Option(TumbleError)) needs () do
+    Arcade.Replay.replay(rs, apply, new_game(rs, seed), actions)
+  end
+
+  -- ---- The spin ----
+  pfn spin(rs : TumbleRules, s : TumbleState) : Result(TumbleTurn, TumbleError) needs () do
+    match s.phase do
+    TumbleLive(_) -> Err(TumbleRoundLive)
+    TumbleOver(_, _) -> Err(TumbleGameOver)
+    TumbleIdle -> deal(rs, s, s.rng, 0)
+    TumbleWon(_, _) -> deal(rs, s, s.rng, 0)
+    TumbleLost(_, _) -> deal(rs, s, s.rng, 0)
+    end
+  end
+
+  doc """A wind's direction: two draws, a point of the square [-1, 1) squared made unit length."""
+  fn draw_wind(rs : TumbleRules, r : Rng) : (Vec2, Rng) needs () do
+    let (ux, r1) = Arcade.Rng.next_unit(rs.num, r)
+    let (uy, r2) = Arcade.Rng.next_unit(rs.num, r1)
+    (normalized(vec2(ux *. 2.0 -. 1.0, uy *. 2.0 -. 1.0)), r2)
+  end
+
+  -- The draws of a spin, in order: three reels, the wind (two), the quake's
+  -- seed (one), then each board shown to the bot. Reels under which the bot
+  -- clears nothing, not even the runway, are spun again (a jam), `jams`
+  -- times at most; past that the spin is refused by name. Nothing the bot
+  -- could not finish is ever handed over.
+  pfn deal(rs : TumbleRules, s : TumbleState, r : Rng, jammed : Int) : Result(TumbleTurn, TumbleError) needs () do
+    let (reels, r1) = Tumble.Power.spin(r)
+    let (wind, r2) = draw_wind(rs, r1)
+    let (noise_seed, r3) = Arcade.Rng.next(r2)
+    let dealt = { reels: reels, mods: Tumble.Power.mods_of(reels), wind: wind, noise: Arcade.Rng.seed(noise_seed) }
+    match lay(rs, s.level, dealt, r3, 0) do
+    (Some(laid), after) -> do
+      let (course, shown, ease) = laid
+      let took = Tumble.Course.proof(course)
+      let limit =
+        Arcade.Num.clamp(took.took *. rs.slack +. rs.spare, rs.least, rs.most) +. dealt.mods.more_time
+      let round =
+        {
+          reels: reels,
+          mods: dealt.mods,
+          wind: wind,
+          course: course,
+          limit: limit,
+          run: Tumble.Roll.begin(Tumble.Course.board(course), dealt.noise),
+          steer: zero()
+        }
+      Ok({ after: { s with rng: after, phase: TumbleLive(round) }, told: [TumbleSpun(reels, { shown: shown, ease: ease, jams: jammed })] })
+    end
+    (None, after) -> do
+      if jammed >= rs.jams do
+        Err(TumbleNoPlayableBoard(jammed + 1))
+      else
+        deal(rs, s, after, jammed + 1)
+      end
+    end
+    end
+  end
+
+  doc """The ease of the board a spin tries at a level on its n-th try (0-based): two easier each time."""
+  fn ease_at(level : Int, tried : Int) : Int needs () do
+    Arcade.Num.clamp_int(level - tried * 2, 0, Tumble.Gen.top_ease())
+  end
+
+  -- Board after board until the bot clears one: `tries` generated boards,
+  -- each two eases under the last, then the runway. Returns the course, how
+  -- many boards the bot was shown and the ease of the one it cleared (-1
+  -- for the runway), or None; and the generator after the boards drawn.
+  pfn lay(rs : TumbleRules, level : Int, d : TumbleDeal, r : Rng, tried : Int) : (Option((TumbleCourse, Int, Int)), Rng) needs () do
+    if tried >= rs.tries do
+      match Tumble.Course.prove(court_on(rs, d, Tumble.Gen.runway()), d.noise) do
+      Some(course) -> (Some((course, tried + 1, -1)), r)
+      None -> (None, r)
+      end
+    else
+      do
+        let ease = ease_at(level, tried)
+        let (board, after) = Tumble.Gen.board(rs.num, ease, r)
+        match Tumble.Course.prove(court_on(rs, d, board), d.noise) do
+        Some(course) -> (Some((course, tried + 1, ease)), after)
+        None -> lay(rs, level, d, after, tried + 1)
+        end
+      end
+    end
+  end
+
+  pfn court_on(rs : TumbleRules, d : TumbleDeal, board : TumbleBoard) : TumbleCourt needs () do
+    { num: rs.num, tune: rs.tune, mods: d.mods, board: board, wind: d.wind }
+  end
+
+  -- ---- Steering ----
+  pfn steer(v : Vec2, s : TumbleState) : Result(TumbleTurn, TumbleError) needs () do
+    match s.phase do
+    TumbleLive(r) -> do
+      Ok({ after: { s with phase: TumbleLive({ r with steer: Tumble.Roll.in_disc(v) }) }, told: [] })
+    end
+    TumbleIdle -> Err(TumbleNoRound)
+    TumbleWon(_, _) -> Err(TumbleNoRound)
+    TumbleLost(_, _) -> Err(TumbleNoRound)
+    TumbleOver(_, _) -> Err(TumbleGameOver)
+    end
+  end
+
+  -- ---- Time ----
+  pfn advance(rs : TumbleRules, n : Int, s : TumbleState) : Result(TumbleTurn, TumbleError) needs () do
+    if n < 1 || n > rs.max_steps do
+      Err(TumbleBadSteps(n))
+    else
+      match s.phase do
+      TumbleLive(r) -> Ok(stepped(rs, s, r, n))
+      TumbleIdle -> Err(TumbleNoRound)
+      TumbleWon(_, _) -> Err(TumbleNoRound)
+      TumbleLost(_, _) -> Err(TumbleNoRound)
+      TumbleOver(_, _) -> Err(TumbleGameOver)
+      end
+    end
+  end
+
+  -- Up to n steps, stopping at the step that ends the round.
+  pfn steps(rs : TumbleRules, c : TumbleCourt, r : TumbleRound, run : TumbleRun, n : Int) : TumbleRun needs () do
+    if n <= 0 do
+      run
+    else
+      do
+        let next = Tumble.Roll.step(c, r.steer, run)
+        let out = time_left(rs, { r with run: next }) <= 0.0
+        match next.fate do
+        FateRolling -> if out do next else steps(rs, c, r, next, n - 1) end
+        FateFalling -> steps(rs, c, r, next, n - 1)
+        FateFell -> next
+        FateCleared -> next
+        end
+      end
+    end
+  end
+
+  pfn met_events(xs : List(Timed(TumbleBump)), acc : List(TumbleEvent)) : List(TumbleEvent) needs () do
+    match xs do
+    Nil -> acc
+    Cons(x, rest) -> met_events(rest, Cons(TumbleMet(x), acc))
+    end
+  end
+
+  doc """What a won round pays: 100 a level, 10 a whole second left, 50 a gem, times the reels' payout."""
+  fn payout(rs : TumbleRules, level : Int, r : TumbleRound) : Int needs () do
+    (100 * (level + 1) + 10 * float_floor(time_left(rs, r)) + 50 * r.run.got) * r.mods.payout
+  end
+
+  pfn stepped(rs : TumbleRules, s : TumbleState, r : TumbleRound, n : Int) : TumbleTurn needs () do
+    let run = steps(rs, court(rs, r), r, r.run, n)
+    let met = met_events(run.met, [])
+    let round = { r with run: { run with met: [] } }
+    match run.fate do
+    FateCleared -> do
+      let paid = payout(rs, s.level, round)
+      {
+        after: { s with level: s.level + 1, score: s.score + paid, phase: TumbleWon(round, paid) },
+        told: List.append(met, [TumbleCleared(paid, time_left(rs, round))])
+      }
+    end
+    FateFell -> lost(s, round, LostFell, met)
+    FateFalling -> { after: { s with phase: TumbleLive(round) }, told: met }
+    FateRolling -> do
+      if time_left(rs, round) <= 0.0 do
+        lost(s, round, LostTime, met)
+      else
+        { after: { s with phase: TumbleLive(round) }, told: met }
+      end
+    end
+    end
+  end
+
+  pfn lost(s : TumbleState, round : TumbleRound, why : TumbleLoss, met : List(TumbleEvent)) : TumbleTurn needs () do
+    let lives = s.lives - 1
+    let told =
+      match why do
+      LostFell -> TumbleDropped(lives)
+      LostTime -> TumbleTimedOut(lives)
+      end
+    if lives <= 0 do
+      {
+        after: { s with lives: 0, phase: TumbleOver(round, why) },
+        told: List.append(met, [told, TumbleEnded(s.score)])
+      }
+    else
+      { after: { s with lives: lives, phase: TumbleLost(round, why) }, told: List.append(met, [told]) }
+    end
+  end
+
+  fn phase_rank(p : TumblePhase) : Int needs () do
+    match p do
+    TumbleIdle -> 0
+    TumbleLive(_) -> 1
+    TumbleWon(_, _) -> 2
+    TumbleLost(_, _) -> 3
+    TumbleOver(_, _) -> 4
+    end
+  end
+
+end

@@ -1,0 +1,264 @@
+mod Tumble.Gen do
+
+  -- Boards from a generator. A board is carved along a spine: from the start
+  -- it climbs two or three rows, runs sideways at least two columns, and
+  -- climbs again until it reaches the top, where the gate goes. Sideways runs
+  -- are therefore at least two rows apart, with void between them. Then the
+  -- spine is widened, iced, and given posts and gems, all by chance, with
+  -- odds set by `ease`: 0 is a wide dry path, each step up is longer,
+  -- narrower, icier and more crowded. Posts and gems-off-the-path only ever
+  -- go on the widening, never on the spine. Whether the result can be played
+  -- is not decided here: Tumble.Course.prove decides that.
+  cap pure
+
+  import Arcade.Vec2
+
+  -- The odds for one board.
+  --   cols, rows  the grid
+  --   widen       the chance each spine cell gets a floor tile beside it, tried `passes` times
+  --   ice         the chance a spine cell is ice
+  --   post        the chance a widening tile has a post
+  --   gem         the chance a widening tile without a post has a gem
+  type TumbleOdds = {
+    cols : Int,
+    rows : Int,
+    widen : Float,
+    passes : Int,
+    ice : Float,
+    post : Float,
+    gem : Float
+  }
+
+  -- A board being carved: the grid, the generator, and the widening tiles
+  -- laid so far (newest first).
+  type TumbleCarve = {
+    tiles : List(List(TumbleTile)),
+    rng : Rng,
+    apron : List(TumbleCell)
+  }
+
+  doc """The hardest ease there is: past it boards stop changing."""
+  fn top_ease() : Int needs () do
+    8
+  end
+
+  doc """The odds at an ease, held to 0...top_ease."""
+  fn odds(ease : Int) : TumbleOdds needs () do
+    let e = Arcade.Num.clamp_int(ease, 0, top_ease())
+    let x = int_to_float(e)
+    {
+      cols: 7,
+      rows: 9 + 2 * e,
+      widen: Arcade.Num.max_float(0.25, 0.95 -. 0.09 *. x),
+      passes: if e <= 2 do 2 else 1 end,
+      ice: if e < 2 do 0.0 else Arcade.Num.min_float(0.3, 0.05 *. (x -. 1.0)) end,
+      post: if e < 1 do 0.0 else Arcade.Num.min_float(0.5, 0.15 +. 0.05 *. x) end,
+      gem: 0.35
+    }
+  end
+
+  -- ---- The spine ----
+  -- Cells from (col, row) up to and including (col, top), newest first on acc.
+  pfn climb(col : Int, row : Int, top : Int, acc : List(TumbleCell)) : List(TumbleCell) needs () do
+    if row > top do acc else climb(col, row + 1, top, Cons(Tumble.Board.cell(col, row), acc)) end
+  end
+
+  -- Cells from `col` toward and including `to` on one row, newest first on acc.
+  pfn across(col : Int, to : Int, row : Int, acc : List(TumbleCell)) : List(TumbleCell) needs () do
+    let next = Cons(Tumble.Board.cell(col, row), acc)
+    if col == to do
+      next
+    else
+      across(if to > col do col + 1 else col - 1 end, to, row, next)
+    end
+  end
+
+  -- From (col, row), already on acc: climb 2 or 3 rows (one draw), or to the
+  -- top if that is nearer; unless at the top, run to a column at least two
+  -- away (one draw) and go round again.
+  pfn wander(o : TumbleOdds, r : Rng, col : Int, row : Int, acc : List(TumbleCell)) : (List(TumbleCell), Rng) needs () do
+    let top = o.rows - 2
+    let (extra, r1) = Arcade.Rng.next_int_below(r, 2)
+    let to_row = row + 2 + extra
+    if to_row >= top do
+      (climb(col, row + 1, top, acc), r1)
+    else
+      do
+        let (k, r2) = Arcade.Rng.next_int_below(r1, o.cols - 3)
+        let to_col = (col + 2 + k) % o.cols
+        let up = climb(col, row + 1, to_row, acc)
+        let over = across(if to_col > col do col + 1 else col - 1 end, to_col, to_row, up)
+        wander(o, r2, to_col, to_row, over)
+      end
+    end
+  end
+
+  doc """A spine for these odds, start first, gate last."""
+  fn spine(o : TumbleOdds, r : Rng) : (List(TumbleCell), Rng) needs () do
+    let col = o.cols / 2
+    let (cells, after) = wander(o, r, col, 1, [Tumble.Board.cell(col, 1)])
+    (List.reverse(cells), after)
+  end
+
+  -- ---- Laying tiles ----
+  pfn lay_all(tiles : List(List(TumbleTile)), cs : List(TumbleCell), t : TumbleTile) : List(List(TumbleTile)) needs () do
+    match cs do
+    Nil -> tiles
+    Cons(c, rest) -> lay_all(Tumble.Board.laid(tiles, c.col, c.row, t), rest, t)
+    end
+  end
+
+  pfn chance(num : Numerics, r : Rng, p : Float) : (Bool, Rng) needs () do
+    let (u, after) = Arcade.Rng.next_unit(num, r)
+    (u < p, after)
+  end
+
+  pfn is_void_at(o : TumbleOdds, tiles : List(List(TumbleTile)), col : Int, row : Int) : Bool needs () do
+    if col < 0 || row < 0 || col >= o.cols || row >= o.rows do
+      false
+    else
+      match List.nth_opt(tiles, row) do
+      None -> false
+      Some(line) -> do
+        match List.nth_opt(line, col) do
+        None -> false
+        Some(t) -> Tumble.Board.is_void(t)
+        end
+      end
+      end
+    end
+  end
+
+  pfn beside(c : TumbleCell, side : Int) : TumbleCell needs () do
+    if side == 0 do
+      Tumble.Board.cell(c.col - 1, c.row)
+    else
+      if side == 1 do
+        Tumble.Board.cell(c.col + 1, c.row)
+      else
+        if side == 2 do
+          Tumble.Board.cell(c.col, c.row - 1)
+        else
+          Tumble.Board.cell(c.col, c.row + 1)
+        end
+      end
+    end
+  end
+
+  -- One pass of widening: for each spine cell two draws (a chance, a side);
+  -- when the chance comes up and that side is void on the grid, floor is laid
+  -- there and the cell joins the apron.
+  pfn widen(num : Numerics, o : TumbleOdds, cs : List(TumbleCell), w : TumbleCarve) : TumbleCarve needs () do
+    match cs do
+    Nil -> w
+    Cons(c, rest) -> do
+      let (yes, r1) = chance(num, w.rng, o.widen)
+      let (side, r2) = Arcade.Rng.next_int_below(r1, 4)
+      let n = beside(c, side)
+      if yes && is_void_at(o, w.tiles, n.col, n.row) do
+        widen(num, o, rest, { tiles: Tumble.Board.laid(w.tiles, n.col, n.row, TileFloor), rng: r2, apron: Cons(n, w.apron) })
+      else
+        widen(num, o, rest, { w with rng: r2 })
+      end
+    end
+    end
+  end
+
+  pfn widen_passes(num : Numerics, o : TumbleOdds, cs : List(TumbleCell), w : TumbleCarve, left : Int) : TumbleCarve needs () do
+    if left <= 0 do w else widen_passes(num, o, cs, widen(num, o, cs, w), left - 1) end
+  end
+
+  -- Ice on the spine: one draw a cell, never on the first two cells or the gate.
+  pfn ice(num : Numerics, o : TumbleOdds, cs : List(TumbleCell), i : Int, last : Int, w : TumbleCarve) : TumbleCarve needs () do
+    match cs do
+    Nil -> w
+    Cons(c, rest) -> do
+      let (yes, r1) = chance(num, w.rng, o.ice)
+      if yes && i >= 2 && i < last do
+        ice(num, o, rest, i + 1, last, { w with tiles: Tumble.Board.laid(w.tiles, c.col, c.row, TileIce), rng: r1 })
+      else
+        ice(num, o, rest, i + 1, last, { w with rng: r1 })
+      end
+    end
+    end
+  end
+
+  -- Posts and gems on the apron: two draws a tile. A tile gets a post, or
+  -- else a gem, or else nothing. Returns (posts, gems, rng).
+  pfn furnish(num : Numerics, o : TumbleOdds, cs : List(TumbleCell), r : Rng, posts : List(Vec2), gems : List(Vec2)) : (List(Vec2), List(Vec2), Rng) needs () do
+    match cs do
+    Nil -> (posts, gems, r)
+    Cons(c, rest) -> do
+      let (post, r1) = chance(num, r, o.post)
+      let (gem, r2) = chance(num, r1, o.gem)
+      let m = Tumble.Board.centre(c)
+      if post do
+        furnish(num, o, rest, r2, Cons(m, posts), gems)
+      else
+        if gem do
+          furnish(num, o, rest, r2, posts, Cons(m, gems))
+        else
+          furnish(num, o, rest, r2, posts, gems)
+        end
+      end
+    end
+    end
+  end
+
+  -- The eight cells round c, for the start's plaza.
+  pfn ring(c : TumbleCell) : List(TumbleCell) needs () do
+    [
+      Tumble.Board.cell(c.col - 1, c.row - 1),
+      Tumble.Board.cell(c.col, c.row - 1),
+      Tumble.Board.cell(c.col + 1, c.row - 1),
+      Tumble.Board.cell(c.col - 1, c.row),
+      Tumble.Board.cell(c.col + 1, c.row),
+      Tumble.Board.cell(c.col - 1, c.row + 1),
+      Tumble.Board.cell(c.col + 1, c.row + 1)
+    ]
+  end
+
+  doc """
+  A board at an ease. The draws, in order: the spine; the widening passes;
+  the ice; the apron's posts and gems. The start stands on a plaza (the
+  tiles round it, laid after the widening so no post or gem is on them).
+  """
+  fn board(num : Numerics, ease : Int, r : Rng) : (TumbleBoard, Rng) needs () do
+    let o = odds(ease)
+    let (cells, r1) = spine(o, r)
+    let paved = lay_all(Tumble.Board.blank(o.cols, o.rows), cells, TileFloor)
+    let wide = widen_passes(num, o, cells, { tiles: paved, rng: r1, apron: [] }, o.passes)
+    let iced = ice(num, o, cells, 0, List.length(cells) - 1, wide)
+    let (posts, gems, r2) = furnish(num, o, List.reverse(iced.apron), iced.rng, [], [])
+    let first = Tumble.Board.cell(o.cols / 2, 1)
+    let plaza = lay_all(iced.tiles, List.filter(ring(first), fn c -> is_void_at(o, iced.tiles, c.col, c.row)), TileFloor)
+    let made = { cols: o.cols, rows: o.rows, tiles: plaza, posts: List.reverse(posts), gems: List.reverse(gems), spine: cells }
+    let g = Tumble.Board.gate_cell(made)
+    ({ made with tiles: Tumble.Board.laid(plaza, g.col, g.row, TileGate) }, r2)
+  end
+
+  -- ---- The runway ----
+  pfn column(col : Int, row : Int, top : Int) : List(TumbleCell) needs () do
+    if row > top do [] else Cons(Tumble.Board.cell(col, row), column(col, row + 1, top)) end
+  end
+
+  doc """
+  The board of last resort, with nothing drawn: five tiles wide and nine
+  long, all floor, the start at one end of the middle and the gate at the
+  other. No ice, no posts, no gaps.
+  """
+  fn runway() : TumbleBoard needs () do
+    let cells = column(2, 1, 7)
+    let made =
+      {
+        cols: 5,
+        rows: 9,
+        tiles: List.repeat(List.repeat(TileFloor, 5), 9),
+        posts: [],
+        gems: [],
+        spine: cells
+      }
+    { made with tiles: Tumble.Board.laid(made.tiles, 2, 7, TileGate) }
+  end
+
+end

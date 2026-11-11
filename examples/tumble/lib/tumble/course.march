@@ -1,0 +1,73 @@
+mod Tumble.Course do
+
+  -- A board the player may be given. TumbleCourse is opaque: the only way to
+  -- make one is `prove`, which has Tumble.Bot play the board under the
+  -- round's own powers, wind and quake draws, and gives None unless the bot
+  -- reaches the gate inside `patience` seconds. So a function that takes a
+  -- TumbleCourse is taking a board that has been cleared once already.
+  cap pure
+
+  import Arcade.Physics.Sim
+
+  -- What the bot's run showed: how long it took, and how many gems it
+  -- happened to take.
+  type TumbleProof = { took : Float, bot_gems : Int }
+
+  opaque type TumbleCourse = Proven(TumbleBoard, TumbleProof)
+
+  -- The bot's run in flight: the run, and the court it is played on.
+  type TumbleTrial = { court : TumbleCourt, bot : TumbleBotTuning }
+
+  doc """How long the bot is given to reach the gate, in seconds."""
+  fn patience() : Float needs () do
+    60.0
+  end
+
+  pfn time_of(r : TumbleRun) : Float needs () do
+    r.clock.t
+  end
+
+  pfn trial_step(t : TumbleTrial, r : TumbleRun) : Turn(TumbleRun, TumbleRun) needs () do
+    let next = Tumble.Roll.step(t.court, Tumble.Bot.steer(t.bot, t.court, r), r)
+    match next.fate do
+    FateRolling -> TurnOn(next)
+    FateFalling -> TurnOn(next)
+    FateFell -> TurnDone(next)
+    FateCleared -> TurnDone(next)
+    end
+  end
+
+  pfn trial_stop(_t : TumbleTrial, r : TumbleRun) : TumbleRun needs () do
+    r
+  end
+
+  doc """The bot's whole run on a court, from the start, with the quake drawing from `noise`."""
+  fn trial(c : TumbleCourt, noise : Rng) : TumbleRun needs () do
+    let t = { court: c, bot: Tumble.Bot.tuning() }
+    run_steps(t, patience(), time_of, trial_step, trial_stop, Tumble.Roll.begin(c.board, noise))
+  end
+
+  doc """The court's board as a course, if the bot clears it."""
+  fn prove(c : TumbleCourt, noise : Rng) : Option(TumbleCourse) needs () do
+    let r = trial(c, noise)
+    match r.fate do
+    FateCleared -> Some(Proven(c.board, { took: r.clock.t, bot_gems: r.got }))
+    FateRolling -> None
+    FateFalling -> None
+    FateFell -> None
+    end
+  end
+
+  fn board(c : TumbleCourse) : TumbleBoard needs () do
+    match c do
+    Proven(b, _) -> b
+    end
+  end
+
+  fn proof(c : TumbleCourse) : TumbleProof needs () do
+    match c do
+    Proven(_, p) -> p
+    end
+  end
+
+end

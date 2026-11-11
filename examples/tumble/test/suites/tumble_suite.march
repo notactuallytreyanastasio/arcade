@@ -1,0 +1,432 @@
+mod Tumble.Suite.Game do
+
+  -- Tumble against itself. The same seed and actions give the same game (and
+  -- the digest pinned here, on native and on JS: the game uses only + - * /
+  -- and sqrt); every board a spin hands over is one the bot then clears
+  -- through the rules themselves; the runway is cleared under every
+  -- combination of powers; the generator's boards have the shape it
+  -- promises; and the ways a round ends, and the refusals, are each played.
+  import Arcade.Test.Harness
+
+  fn rs() : TumbleRules do
+    Tumble.Rules.rules()
+  end
+
+  fn num() : Numerics do
+    let r = rs()
+    r.num
+  end
+
+  fn tilt_on_ice() : Float do
+    let r = rs()
+    r.tune.push *. r.tune.ice_grip
+  end
+
+  fn seed_of(n : Int) : Arcade.U64.U64 do
+    Arcade.U64.of_int(n)
+  end
+
+  -- ---- Digests ----
+  fn vec_digest(h : Int, v : Arcade.Vec2.Vec2) : Int do
+    Arcade.Test.Digest.float(Arcade.Test.Digest.float(h, v.x), v.y)
+  end
+
+  fn tile_digest(h : Int, t : TumbleTile) : Int do
+    Arcade.Test.Digest.int(h, Tumble.Board.tile_rank(t))
+  end
+
+  fn line_digest(h : Int, line : List(TumbleTile)) : Int do
+    Arcade.Test.Digest.list(h, line, tile_digest)
+  end
+
+  fn cell_digest(h : Int, c : TumbleCell) : Int do
+    Arcade.Test.Digest.ints(h, [c.col, c.row])
+  end
+
+  fn board_digest(h : Int, b : TumbleBoard) : Int do
+    let a = Arcade.Test.Digest.list(Arcade.Test.Digest.ints(h, [b.cols, b.rows]), b.tiles, line_digest)
+    let c = Arcade.Test.Digest.list(Arcade.Test.Digest.list(a, b.posts, vec_digest), b.gems, vec_digest)
+    Arcade.Test.Digest.list(c, b.spine, cell_digest)
+  end
+
+  fn spin_digest(h : Int, s : TumbleSpin) : Int do
+    Arcade.Test.Digest.ints(h, List.map(Tumble.Power.powers(s), Tumble.Power.power_rank))
+  end
+
+  fn run_digest(h : Int, r : TumbleRun) : Int do
+    let a = Arcade.Test.Digest.int(Arcade.Test.Digest.float(h, r.clock.t), r.clock.step)
+    let b = vec_digest(vec_digest(vec_digest(a, r.ball.at), r.ball.vel), r.ball.tilt)
+    let c = Arcade.Test.Digest.float(Arcade.Test.Digest.float(b, r.ball.z), r.ball.vz)
+    let d = Arcade.Test.Digest.ints(c, [Tumble.Roll.fate_rank(r.fate), r.got])
+    vec_digest(Arcade.Test.Digest.u64(Arcade.Test.Digest.list(d, r.gems, vec_digest), r.noise.word), r.jolt)
+  end
+
+  fn round_digest(h : Int, r : TumbleRound) : Int do
+    let a = vec_digest(spin_digest(h, r.reels), r.wind)
+    let b = board_digest(a, Tumble.Course.board(r.course))
+    vec_digest(run_digest(Arcade.Test.Digest.float(b, r.limit), r.run), r.steer)
+  end
+
+  fn state_digest(h : Int, s : TumbleState) : Int do
+    let a = Arcade.Test.Digest.u64(Arcade.Test.Digest.u64(h, s.rng.word), s.seed)
+    let b = Arcade.Test.Digest.ints(a, [s.level, s.lives, s.score, Tumble.Rules.phase_rank(s.phase)])
+    Arcade.Test.Digest.option(b, Tumble.Rules.round_of(s), round_digest)
+  end
+
+  -- ---- A player through the rules ----
+  -- The bot as a policy for Arcade.Replay.drive: spin when there is no round
+  -- being played, hold the tilt Tumble.Bot wants when it differs from the
+  -- one held (as the rules hold it, in the unit disc: compared any other
+  -- way a tilt a rounding over length 1 never matches and the bot steers
+  -- for ever), otherwise let four steps pass. It steers every fourth step
+  -- where the generator's proof steered every step, so winning here is not
+  -- a replay of the proof. Nothing once the game is over
+  -- or `rounds` rounds have been won.
+  type Player = { rules : TumbleRules, rounds : Int }
+
+  fn bot_policy(p : Player, s : TumbleState) : Option(TumbleAction) do
+    match s.phase do
+    TumbleOver(_, _) -> None
+    TumbleIdle -> Some(TumbleSpinReels)
+    TumbleWon(_, _) -> if s.level >= p.rounds do None else Some(TumbleSpinReels) end
+    TumbleLost(_, _) -> Some(TumbleSpinReels)
+    TumbleLive(r) -> do
+      let want =
+        Tumble.Roll.in_disc(Tumble.Bot.steer(Tumble.Bot.tuning(), Tumble.Rules.court(p.rules, r), r.run))
+      if Arcade.Vec2.equal(want, r.steer) do Some(TumbleStep(4)) else Some(TumbleSteer(want)) end
+    end
+    end
+  end
+
+  fn apply_for(p : Player, a : TumbleAction, s : TumbleState) : Result(TumbleState, TumbleError) do
+    Tumble.Rules.apply(p.rules, a, s)
+  end
+
+  fn bot_game(seed : Int, rounds : Int) : (TumbleState, List(TumbleAction), Option(TumbleError)) do
+    let p = { rules: rs(), rounds: rounds }
+    Arcade.Replay.drive(p, apply_for, bot_policy, Tumble.Rules.new_game(p.rules, seed_of(seed)), 200000)
+  end
+
+  -- ---- Cases ----
+  fn spun(seed : Int) : Result(TumbleTurn, TumbleError) do
+    Tumble.Rules.play(rs(), TumbleSpinReels, Tumble.Rules.new_game(rs(), seed_of(seed)))
+  end
+
+  fn case_spin_is_seeded() : Outcome do
+    match (spun(2026), spun(2026), spun(7)) do
+    (Ok(a), Ok(b), Ok(c)) -> do
+      let da = state_digest(Arcade.Test.Digest.start(), a.after)
+      let db = state_digest(Arcade.Test.Digest.start(), b.after)
+      let dc = state_digest(Arcade.Test.Digest.start(), c.after)
+      all([
+        expect_int(da, db, "the same seed spins the same round"),
+        expect(da != dc, "another seed spins another round"),
+        expect_int(da, pinned_spin(), "seed 2026's first round, native and JS")
+      ])
+    end
+    (_, _, _) -> Mismatch("a first spin was refused")
+    end
+  end
+
+  fn pinned_spin() : Int do
+    2740221540
+  end
+
+  fn pinned_game() : Int do
+    2414995061
+  end
+
+  fn case_bot_wins_what_it_is_dealt() : Outcome do
+    let (s, actions, refused) = bot_game(2026, 6)
+    let (again, taken, refused_again) = Tumble.Rules.resume(rs(), seed_of(2026), actions)
+    let d = state_digest(Arcade.Test.Digest.start(), s)
+    all([
+      expect(Option.is_none(refused), "the bot was never refused"),
+      expect_int(s.level, 6, "six rounds won"),
+      expect_int(s.lives, 3, "no life lost: every board dealt was one the bot clears"),
+      expect_int(taken, List.length(actions), "every action replays"),
+      expect(Option.is_none(refused_again), "the replay was never refused"),
+      expect_int(state_digest(Arcade.Test.Digest.start(), again), d, "the replay reaches the same state"),
+      expect_int(d, pinned_game(), "seed 2026's six rounds, native and JS")
+    ])
+  end
+
+  fn wins_all(seed : Int) : Outcome do
+    let (s, _, refused) = bot_game(seed, 4)
+    all([
+      expect(Option.is_none(refused), "seed " ++ int_to_string(seed) ++ ": never refused"),
+      expect_int(s.level, 4, "seed " ++ int_to_string(seed) ++ ": four rounds won"),
+      expect_int(s.lives, 3, "seed " ++ int_to_string(seed) ++ ": no life lost")
+    ])
+  end
+
+  fn case_many_seeds() : Outcome do
+    all(List.map(List.range(1, 13), wins_all))
+  end
+
+  -- Every multiset of three powers, as reels.
+  fn triples() : List(TumbleSpin) do
+    let ps = Tumble.Power.every()
+    List.flat_map(ps, fn a ->
+      List.flat_map(ps, fn b ->
+        List.filter_map(ps, fn c ->
+          if Tumble.Power.power_rank(a) <= Tumble.Power.power_rank(b) && Tumble.Power.power_rank(b) <= Tumble.Power.power_rank(c) do
+            Some({ first: a, second: b, third: c })
+          else
+            None
+          end
+        )
+      )
+    )
+  end
+
+  fn runway_cleared(reels : TumbleSpin, noise : Int) : Bool do
+    let r = rs()
+    let c =
+      {
+        num: r.num,
+        tune: r.tune,
+        mods: Tumble.Power.mods_of(reels),
+        board: Tumble.Gen.runway(),
+        wind: Arcade.Vec2.vec2(0.6, -0.8)
+      }
+    Option.is_some(Tumble.Course.prove(c, Arcade.Rng.seed(seed_of(noise))))
+  end
+
+  fn label(s : TumbleSpin) : String do
+    String.join(List.map(Tumble.Power.powers(s), Tumble.Power.name), "+")
+  end
+
+  fn case_runway_under_every_spin() : Outcome do
+    let ts = triples()
+    let failed =
+      List.filter(ts, fn t -> !(runway_cleared(t, 1) && runway_cleared(t, 2) && runway_cleared(t, 3)))
+    all([
+      expect_int(List.length(ts), 364, "multisets of three from twelve powers"),
+      expect(List.is_empty(failed), "the bot clears the runway under every spin; not under " ++ String.join(List.map(failed, label), " "))
+    ])
+  end
+
+  -- ---- The generator's promises ----
+  fn neighbours(a : TumbleCell, b : TumbleCell) : Bool do
+    let dc = a.col - b.col
+    let dr = a.row - b.row
+    dc * dc + dr * dr == 1
+  end
+
+  fn chained(cs : List(TumbleCell)) : Bool do
+    match cs do
+    Cons(a, Cons(b, rest)) -> if neighbours(a, b) do chained(Cons(b, rest)) else false end
+    Cons(_, Nil) -> true
+    Nil -> false
+    end
+  end
+
+  fn on_spine(b : TumbleBoard, p : Arcade.Vec2.Vec2) : Bool do
+    let at = Tumble.Board.cell_under(p)
+    List.any(b.spine, fn c -> Tumble.Board.same_cell(c, at))
+  end
+
+  fn sound(ease : Int, seed : Int) : Outcome do
+    let (b, _) = Tumble.Gen.board(num(), ease, Arcade.Rng.seed(seed_of(seed)))
+    let what = "ease " ++ int_to_string(ease) ++ " seed " ++ int_to_string(seed) ++ ": "
+    let g = Tumble.Board.gate_cell(b)
+    all([
+      expect(chained(b.spine), what ++ "each spine cell is beside the one before"),
+      expect(List.all(b.spine, fn c -> !Tumble.Board.is_void(Tumble.Board.tile_at(b, c.col, c.row))), what ++ "the spine is floor"),
+      expect_int(Tumble.Board.tile_rank(Tumble.Board.tile_at(b, g.col, g.row)), 3, what ++ "the spine ends on the gate"),
+      expect(!List.any(b.posts, fn p -> on_spine(b, p)), what ++ "no post on the spine"),
+      expect(List.all(b.posts, fn p -> !Tumble.Board.is_void(Tumble.Board.tile_under(b, p))), what ++ "posts stand on floor"),
+      expect(List.all(b.gems, fn p -> !Tumble.Board.is_void(Tumble.Board.tile_under(b, p))), what ++ "gems lie on floor"),
+      expect_int(List.length(b.tiles), b.rows, what ++ "rows")
+    ])
+  end
+
+  fn case_boards_are_sound() : Outcome do
+    all(List.flat_map(List.range(0, 9), fn e -> List.map(List.range(1, 9), fn s -> sound(e, s))))
+  end
+
+  fn case_harder_is_longer() : Outcome do
+    let (easy, _) = Tumble.Gen.board(num(), 0, Arcade.Rng.seed(seed_of(5)))
+    let (hard, _) = Tumble.Gen.board(num(), 8, Arcade.Rng.seed(seed_of(5)))
+    all([
+      expect_int(easy.rows, 9, "ease 0 is nine rows"),
+      expect_int(hard.rows, 25, "ease 8 is twenty-five"),
+      expect(List.is_empty(easy.posts), "ease 0 has no posts"),
+      expect(List.length(hard.spine) > List.length(easy.spine), "a harder spine is longer")
+    ])
+  end
+
+  -- ---- Powers ----
+  fn reels(a : TumblePower, b : TumblePower, c : TumblePower) : TumbleSpin do
+    { first: a, second: b, third: c }
+  end
+
+  fn case_powers_stack() : Outcome do
+    let two_mirrors = Tumble.Power.mods_of(reels(PowMirror, PowMirror, PowClock))
+    let one_mirror = Tumble.Power.mods_of(reels(PowMirror, PowTurbo, PowTurbo))
+    let jack = Tumble.Power.mods_of(reels(PowMagnet, PowMagnet, PowMagnet))
+    all([
+      expect(two_mirrors.flip == 1.0, "two Mirrors cancel"),
+      expect(one_mirror.flip == -1.0, "one Mirror swaps"),
+      expect(one_mirror.push > 1.9 && one_mirror.push < 2.0, "two Turbos push 1.96 times"),
+      expect(two_mirrors.more_time == 10.0, "a Clock is ten seconds"),
+      expect_int(jack.payout, 3, "three alike pay triple"),
+      expect_int(one_mirror.payout, 1, "anything else pays once"),
+      expect(jack.magnet == 3.0 && jack.reach == 7.5, "three Magnets reach further and pull no harder"),
+      expect(jack.magnet < tilt_on_ice(), "the Magnet's pull is under a full tilt's on ice"),
+      expect_int(Tumble.Power.stops(Tumble.Power.strip()), 40, "a reel has forty stops"),
+      expect_int(List.length(Tumble.Power.every()), 12, "twelve powers")
+    ])
+  end
+
+  -- ---- How a round ends ----
+  fn steps(s : TumbleState, steer : Arcade.Vec2.Vec2, most : Int) : TumbleState do
+    match Tumble.Rules.apply(rs(), TumbleSteer(steer), s) do
+    Err(_) -> s
+    Ok(held) -> step_on(held, most)
+    end
+  end
+
+  fn step_on(s : TumbleState, left : Int) : TumbleState do
+    if left <= 0 do
+      s
+    else
+      match Tumble.Rules.apply(rs(), TumbleStep(16), s) do
+      Ok(next) -> step_on(next, left - 1)
+      Err(_) -> s
+      end
+    end
+  end
+
+  -- A game whose rounds the player throws away by holding the floor one way.
+  fn thrown(s : TumbleState, steer : Arcade.Vec2.Vec2, rounds : Int) : TumbleState do
+    if rounds <= 0 do
+      s
+    else
+      match Tumble.Rules.apply(rs(), TumbleSpinReels, s) do
+      Ok(live) -> thrown(steps(live, steer, 2000), steer, rounds - 1)
+      Err(_) -> s
+      end
+    end
+  end
+
+  -- Seed 12's first three spins have no Rails, so a ball held one way leaves the floor.
+  fn case_falling_costs_a_life() : Outcome do
+    let once = thrown(Tumble.Rules.new_game(rs(), seed_of(12)), Arcade.Vec2.vec2(0.0, -1.0), 1)
+    let thrice = thrown(Tumble.Rules.new_game(rs(), seed_of(12)), Arcade.Vec2.vec2(0.0, -1.0), 3)
+    all([
+      expect_int(Tumble.Rules.phase_rank(once.phase), 3, "held downhill off the start, the round is lost"),
+      expect_int(once.lives, 2, "and a life with it"),
+      expect_int(once.level, 0, "the level stays"),
+      expect_int(Tumble.Rules.phase_rank(thrice.phase), 4, "three lost rounds end the game"),
+      expect_int(thrice.lives, 0, "no lives left"),
+      expect(Result.is_err(Tumble.Rules.apply(rs(), TumbleSpinReels, thrice)), "a finished game refuses a spin")
+    ])
+  end
+
+  fn case_time_runs_out() : Outcome do
+    match spun(2026) do
+    Err(_) -> Mismatch("the spin was refused")
+    Ok(turn) -> do
+      let idle = step_on(turn.after, 2000)
+      match (turn.after.phase, idle.phase) do
+      (TumbleLive(r), TumbleLost(after, LostTime)) -> do
+        all([
+          expect(r.limit >= 20.0, "a round is at least twenty seconds"),
+          expect(after.run.clock.t >= r.limit, "the round ran its whole limit"),
+          expect(after.run.clock.t < r.limit +. 0.01, "and stopped on the step that passed it"),
+          expect_int(idle.lives, 2, "a life lost")
+        ])
+      end
+      (_, _) -> Mismatch("a ball left alone did not run out of time")
+      end
+    end
+    end
+  end
+
+  fn case_limit_follows_the_bot() : Outcome do
+    match spun(2026) do
+    Err(_) -> Mismatch("the spin was refused")
+    Ok(turn) -> do
+      match turn.after.phase do
+      TumbleLive(r) -> do
+        let p = Tumble.Course.proof(r.course)
+        all([
+          expect(p.took > 0.0, "the bot's time is on the course"),
+          expect(r.limit >= p.took *. 2.0, "the player gets at least twice the bot's time")
+        ])
+      end
+      _ -> Mismatch("no round after a spin")
+      end
+    end
+    end
+  end
+
+  fn case_refusals() : Outcome do
+    let fresh = Tumble.Rules.new_game(rs(), seed_of(3))
+    match Tumble.Rules.apply(rs(), TumbleSpinReels, fresh) do
+    Err(_) -> Mismatch("the spin was refused")
+    Ok(live) -> do
+      all([
+        expect(Result.is_err(Tumble.Rules.apply(rs(), TumbleStep(1), fresh)), "no steps before a spin"),
+        expect(Result.is_err(Tumble.Rules.apply(rs(), TumbleSteer(Arcade.Vec2.zero()), fresh)), "no steering before a spin"),
+        expect(Result.is_err(Tumble.Rules.apply(rs(), TumbleSpinReels, live)), "no spin during a round"),
+        expect(Result.is_err(Tumble.Rules.apply(rs(), TumbleStep(0), live)), "no zero steps"),
+        expect(Result.is_err(Tumble.Rules.apply(rs(), TumbleStep(65), live)), "no more than 64 steps at once")
+      ])
+    end
+    end
+  end
+
+  -- ---- The roll, by hand ----
+  fn flat_court(mods : TumbleMods) : TumbleCourt do
+    let r = rs()
+    { num: r.num, tune: r.tune, mods: mods, board: Tumble.Gen.runway(), wind: Arcade.Vec2.zero() }
+  end
+
+  fn roll_for(c : TumbleCourt, steer : Arcade.Vec2.Vec2, r : TumbleRun, n : Int) : TumbleRun do
+    if n <= 0 do r else roll_for(c, steer, Tumble.Roll.step(c, steer, r), n - 1) end
+  end
+
+  fn case_roll_by_hand() : Outcome do
+    let plain = flat_court(Tumble.Power.plain())
+    let start = Tumble.Roll.begin(plain.board, Arcade.Rng.seed(seed_of(1)))
+    let still = roll_for(plain, Arcade.Vec2.zero(), start, 128)
+    let right = roll_for(plain, Arcade.Vec2.vec2(1.0, 0.0), start, 64)
+    let mirrored =
+      roll_for(flat_court(Tumble.Power.with_power(Tumble.Power.plain(), PowMirror)), Arcade.Vec2.vec2(1.0, 0.0), start, 64)
+    let off = roll_for(plain, Arcade.Vec2.vec2(0.0, -1.0), start, 256)
+    let railed =
+      roll_for(flat_court(Tumble.Power.with_power(Tumble.Power.plain(), PowRails)), Arcade.Vec2.vec2(0.0, -1.0), start, 256)
+    all([
+      expect(Arcade.Vec2.equal(still.ball.at, start.ball.at), "a ball on a level floor stays put"),
+      expect(still.clock.t == 1.0, "128 steps are one second, exactly"),
+      expect(right.ball.at.x > start.ball.at.x +. 0.5, "tilted right, it rolls right"),
+      expect(right.ball.at.y == start.ball.at.y, "and not up or down"),
+      expect(mirrored.ball.at.x +. right.ball.at.x == 2.0 *. start.ball.at.x, "under Mirror the same tilt rolls it as far left"),
+      expect_int(Tumble.Roll.fate_rank(off.fate), 2, "tilted off the near edge, it falls out of sight within two seconds"),
+      expect(off.ball.z < 0.0, "below the floor"),
+      expect_int(Tumble.Roll.fate_rank(railed.fate), 0, "with Rails it stays on"),
+      expect(railed.ball.at.y >= 0.3, "held a radius from the edge")
+    ])
+  end
+
+  fn cases() : List(Case) do
+    [
+      case("a spin is its seed", fn () -> case_spin_is_seeded()),
+      case("the bot wins what it is dealt, and the game replays", fn () -> case_bot_wins_what_it_is_dealt()),
+      case("twelve more seeds, four rounds each, no life lost", fn () -> case_many_seeds()),
+      case("the runway is cleared under every spin", fn () -> case_runway_under_every_spin()),
+      case("generated boards are sound", fn () -> case_boards_are_sound()),
+      case("a harder board is longer", fn () -> case_harder_is_longer()),
+      case("powers stack", fn () -> case_powers_stack()),
+      case("falling costs a life, three end the game", fn () -> case_falling_costs_a_life()),
+      case("time runs out", fn () -> case_time_runs_out()),
+      case("the limit follows the bot's time", fn () -> case_limit_follows_the_bot()),
+      case("refusals", fn () -> case_refusals()),
+      case("the roll, by hand", fn () -> case_roll_by_hand())
+    ]
+  end
+
+end

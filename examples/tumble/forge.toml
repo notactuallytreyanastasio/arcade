@@ -1,0 +1,15 @@
+[package]
+name = "tumble"
+version = "0.1.0"
+type = "app"
+entrypoint = "lib/tumble/rules.march"
+description = "Tumble: tilt the floor, roll the ball to the gate. A slot machine deals each round's powers, and every board is generated and then cleared by a bot before the player sees it."
+author = ""
+license = "MIT"
+
+[deps]
+arcade = { path = "../.." }
+arcade-physics = { path = "../../physics" }
+
+[dev-deps]
+arcade-testkit = { path = "../../testkit" }
