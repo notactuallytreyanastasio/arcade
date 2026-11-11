@@ -212,6 +212,9 @@ mod Putt.Rules do
     end
   end
 
+  -- Not used by the game since it took to pulls (Putt.Aim.shot_of_pull):
+  -- measured in a browser, a flick's power was not repeatable and could not
+  -- be shown before release. Kept while the suite pins it.
   doc """
   A flick on screen as a putt. The aim runs from where the flick began to
   where it was fastest, screen y flipped to course y (the orthographic

@@ -3,7 +3,7 @@
 #   make test    the suites, native and JS (HARNESS PASS on both)
 #   make web     the browser build: a static site in dist/
 #   make serve   serve dist/ at http://127.0.0.1:$(PORT)/
-#   make playtest  one flick in headless Chrome against dist/ on $(PORT)
+#   make playtest  a hole played in headless Chrome against dist/ on $(PORT)
 
 ARCADE := ../..
 include $(ARCADE)/arcade.mk
@@ -17,9 +17,11 @@ test: test-native test-js
 
 test-native:
 	scripts/run-suite.sh putt native
+	scripts/run-suite.sh putt_feel native
 
 test-js:
 	scripts/run-suite.sh putt js
+	scripts/run-suite.sh putt_feel js
 
 # The browser build. march is called directly, as forge puts only lib/ and
 # the deps on the module path and the shell's modules are in shell/. The

@@ -1,0 +1,251 @@
+mod Putt.Suite.Feel do
+
+  -- What the player does and reads: a pull as a putt (Putt.Aim), how far a
+  -- reasonable pull sends the ball, what the preview promises against what
+  -- the roll does, the words of the bands and the scorecard, and where the
+  -- frame puts the hole (Putt.Hud). The roll cases run on a plain lane made
+  -- here, so they hold whatever holes the course has; the layout and card
+  -- cases walk Putt.Course.holes(), however many there are.
+  import Arcade.Test.Harness
+
+  fn rs() : PuttRules do
+    Putt.Rules.rules()
+  end
+
+  fn aim() : AimTuning do
+    Putt.Aim.tuning()
+  end
+
+  fn near(a : Float, b : Float, tol : Float, what : String) : Outcome do
+    expect(Math.abs(a -. b) <= tol, what ++ ": got " ++ float_to_string(a) ++ ", want " ++ float_to_string(b))
+  end
+
+  -- A bare lane 2 m by 8 m, the tee 1 m up it and the cup 5 m beyond: the
+  -- first hole with its measures replaced, so whatever else a hole carries
+  -- comes along.
+  fn lane() : PuttHole do
+    let first = Putt.Course.straight()
+    { first with title: "Lane", par: 2, width: 2.0, length: 8.0, tee: Arcade.Vec2.vec2(1.0, 1.0), cup: Arcade.Vec2.vec2(1.0, 6.0), blocks: [], sands: [] }
+  end
+
+  fn pull(x : Float, y : Float) : Arcade.Vec2.Vec2 do
+    Arcade.Vec2.vec2(x, y)
+  end
+
+  fn shot_text(s : Option(PuttShot)) : String do
+    match s do
+    None -> "none"
+    Some(shot) -> do
+      Arcade.Draw.css_number(shot.aim.x) ++ " " ++ Arcade.Draw.css_number(shot.aim.y) ++ " @ " ++ Arcade.Draw.css_number(shot.power)
+    end
+    end
+  end
+
+  fn of_pull(x : Float, y : Float) : String do
+    shot_text(Putt.Aim.shot_of_pull(rs(), aim(), pull(x, y)))
+  end
+
+  -- ---- A pull as a putt ----
+  fn pull_cases() : Outcome do
+    all([expect_string(of_pull(0.0, 0.0), "none", "a tap is no putt"), expect_string(of_pull(0.0, 12.0), "none", "the dead zone is no putt"), expect_string(of_pull(0.0, 86.0), "0 1 @ 2.05", "pulling down the screen putts up the course at half power"), expect_string(of_pull(0.0, -86.0), "0 -1 @ 2.05", "pulling up putts down"), expect_string(of_pull(-86.0, 0.0), "1 0 @ 2.05", "pulling left putts right"), expect_string(of_pull(30.0, 40.0), "-0.60 0.80 @ 1.10", "a slanted pull keeps its line"), expect_string(of_pull(0.0, 160.0), "0 1 @ 4", "the full pull is the strongest putt"), expect_string(of_pull(0.0, 900.0), "0 1 @ 4", "and a longer one is no stronger"), expect_string(of_pull(0.0, 13.0), "0 1 @ 0.13", "just past the dead zone is the softest")])
+  end
+
+  -- Every pull on a grid is no putt or a putt the rules accept.
+  fn accepted(x : Float, y : Float) : Bool do
+    match Putt.Aim.shot_of_pull(rs(), aim(), pull(x, y)) do
+    None -> true
+    Some(shot) -> do
+      match Putt.Rules.play(rs(), PuttStrike(shot), Putt.Rules.new_game(rs(), Arcade.U64.of_int(5))) do
+      Ok(_) -> true
+      Err(_) -> false
+      end
+    end
+    end
+  end
+
+  fn refused_at(i : Int, j : Int) : Int do
+    if accepted(int_to_float(i - 4) *. 55.0, int_to_float(j - 4) *. 55.0) do
+      0
+    else
+      1
+    end
+  end
+
+  fn grid_ok(i : Int, j : Int, bad : Int) : Int do
+    if i > 8 do
+      bad
+    else
+      if j > 8 do
+        grid_ok(i + 1, 0, bad)
+      else
+        grid_ok(i, j + 1, bad + refused_at(i, j))
+      end
+    end
+  end
+
+  fn round_trip() : Outcome do
+    let want = { aim: Arcade.Vec2.vec2(0.6, 0.8), power: 2.5 }
+    let back = Putt.Aim.pull_of_shot(rs(), aim(), want)
+    all([expect_string(shot_text(Putt.Aim.shot_of_pull(rs(), aim(), back)), "0.60 0.80 @ 2.50", "pull_of_shot is shot_of_pull's inverse"), expect_int(grid_ok(0, 0, 0), 0, "pulls on a 9 x 9 grid out to 220 px the rules refuse")])
+  end
+
+  -- ---- How far a pull sends the ball, and what the preview said ----
+  fn rolled(h : PuttHole, shot : PuttShot) : PuttRollEnd do
+    Putt.Roll.roll(Putt.Roll.tuning(), h, Arcade.Vec2.zero(), h.tee, Arcade.Vec2.scale(shot.aim, shot.power))
+  end
+
+  fn seen(h : PuttHole, shot : PuttShot) : AimPreview do
+    Putt.Aim.preview(rs(), aim(), h, h.tee, shot)
+  end
+
+  fn distance_cases() : Outcome do
+    let h = lane()
+    match (Putt.Aim.shot_of_pull(rs(), aim(), pull(0.0, 49.0)), Putt.Aim.shot_of_pull(rs(), aim(), pull(0.0, 86.0)), Putt.Aim.shot_of_pull(rs(), aim(), pull(0.0, 160.0))) do
+    (Some(soft), Some(half), Some(full)) -> do
+      let soft_end = rolled(h, soft)
+      let half_end = rolled(h, half)
+      let half_seen = seen(h, half)
+      let full_seen = seen(h, full)
+      let side = seen(h, { aim: Arcade.Vec2.vec2(1.0, 0.0), power: 2.0 })
+      all([near(soft.power, 1.075, 0.000001, "a quarter pull's power"), near(soft_end.rest.y -. h.tee.y, 0.963, 0.01, "a quarter pull (49 px) rolls v^2 / 2 drag = 0.96 m"), near(half_end.rest.y -. h.tee.y, 3.502, 0.01, "a half pull (86 px) rolls 3.50 m"), expect(!half_end.holed, "and stops short of a cup 5 m off"), near(half_seen.reach, 3.502, 0.01, "the preview of a half pull reaches as far as the roll"), expect(Arcade.Vec2.equal(half_seen.ends, half_end.rest), "and ends where the ball rests"), expect(!half_seen.holes && !half_seen.bounces, "in the open"), expect(List.length(half_seen.dots) >= 10, "with dots along the way"), expect(full_seen.bounces, "the full pull's preview is cut at the far wall"), near(full_seen.reach, 7.0 -. 0.021, 0.13, "one path sample short of it"), expect(side.bounces, "a putt at the side wall is cut there"), expect(side.ends.x <= 2.0 -. 0.021 && side.ends.x > 1.85, "within a sample of the wall")])
+    end
+    (_, _, _) -> Mismatch("a pull past the dead zone gave no shot")
+    end
+  end
+
+  fn holing_cases() : Outcome do
+    let h = lane()
+    let sinks = seen(h, { aim: Arcade.Vec2.vec2(0.0, 1.0), power: 2.55 })
+    let lips = seen(h, { aim: Arcade.Vec2.vec2(0.0, 1.0), power: 3.6 })
+    let sandy =
+      seen({ h with sands: [Putt.Course.box(0.0, 2.0, 2.0, 4.0)] }, { aim: Arcade.Vec2.vec2(0.0, 1.0), power: 2.55 })
+    all([expect(sinks.holes, "a putt that drops in still air previews as holed"), expect(Arcade.Vec2.equal(sinks.ends, h.cup), "ending on the cup"), near(sinks.reach, 5.0, 0.001, "5 m away"), expect(!lips.holes && lips.bounces, "a putt too fast for the cup runs on to the wall"), expect(!sandy.holes && !sandy.bounces, "sand does not cut the preview"), expect(sandy.ends.y < 4.0 && sandy.ends.y > 2.0, "it shows the ball dying in the sand")])
+  end
+
+  -- ---- Words ----
+  fn pars_plus(pars : List(Int), n : Int, extra : Int, acc : List(Int)) : List(Int) do
+    match pars do
+    Nil -> List.reverse(acc)
+    Cons(p, rest) -> do
+      if n <= 0 do
+        List.reverse(acc)
+      else
+        pars_plus(rest, n - 1, extra, Cons(p + extra, acc))
+      end
+    end
+    end
+  end
+
+  fn word_cases() : Outcome do
+    let s = Putt.Rules.new_game(rs(), Arcade.U64.of_int(2026))
+    let n = Putt.Course.hole_count()
+    let count = int_to_string(n)
+    let first = Putt.Rules.current(s)
+    let holed_s =
+      { s with ball: first.cup, strokes: first.par - 1, card: [first.par - 1], phase: PuttHoleDone }
+    let picked = { s with strokes: 6, card: [6], phase: PuttHoleDone }
+    let over = { s with card: pars_plus(Putt.Hud.card_pars(), 1, 2, []) }
+    all([expect_string(Putt.Hud.hole_line(s), "HOLE 1/" ++ count, "the hole of how many"), expect_string(Putt.Hud.par_line(s), first.title ++ " - par " ++ int_to_string(first.par), "its name and par"), expect_string(Putt.Hud.stroke_line(s), "STROKE 1", "the stroke about to be played"), expect_string(Putt.Hud.stroke_line({ s with strokes: 3 }), "STROKE 4", "after three"), expect_string(Putt.Hud.score_line(s), "Score E", "no hole finished"), expect_string(Putt.Hud.score_line(over), "Score +2 thru 1", "two over after one"), expect_string(Putt.Hud.score_line(holed_s), "Score -1 thru 1", "one under after one"), expect_string(Putt.Hud.stroke_line(holed_s), "IN " ++ int_to_string(first.par - 1), "a holed hole"), expect_string(Putt.Hud.stroke_line(picked), "PICKED UP", "a hole given up"), expect(Putt.Hud.holed(holed_s) && !Putt.Hud.holed(picked), "holed is the ball on the cup"), expect_string(Putt.Hud.card_prompt(s), "", "no prompt while aiming"), expect_string(Putt.Hud.card_prompt({ holed_s with hole: n - 1 }), "Tap for the final card", "the last hole's prompt"), expect_string(Putt.Hud.card_prompt({ s with phase: PuttCourseDone }), "Tap to play again", "the course's prompt"), expect_string(Putt.Hud.card_title({ s with phase: PuttCourseDone }), "Course done", "the course's headline"), expect_string(Putt.Hud.hint(), "Drag back anywhere, let go to putt", "the hint")])
+  end
+
+  fn verdict_cases() : Outcome do
+    all([expect_string(Putt.Hud.verdict(1, 3, true), "Hole in one!", "one stroke"), expect_string(Putt.Hud.verdict(2, 5, true), "Albatross!", "three under"), expect_string(Putt.Hud.verdict(2, 4, true), "Eagle!", "two under"), expect_string(Putt.Hud.verdict(2, 3, true), "Birdie!", "one under"), expect_string(Putt.Hud.verdict(3, 3, true), "Par", "level"), expect_string(Putt.Hud.verdict(4, 3, true), "Bogey", "one over"), expect_string(Putt.Hud.verdict(5, 3, true), "Double bogey", "two over"), expect_string(Putt.Hud.verdict(6, 3, true), "3 over par", "three over"), expect_string(Putt.Hud.verdict(6, 3, false), "Picked up after 6", "not holed"), expect_string(Putt.Hud.versus_par(0) ++ " " ++ Putt.Hud.versus_par(3) ++ " " ++ Putt.Hud.versus_par(-2), "E +3 -2", "against par, short"), expect_string(Putt.Hud.par_words(0) ++ "; " ++ Putt.Hud.par_words(1) ++ "; " ++ Putt.Hud.par_words(-2), "level par; 1 over par; 2 under par", "against par, in words")])
+  end
+
+  fn wind_cases() : Outcome do
+    let r = rs()
+    let w = r.tune.wind_max
+    all([expect_string(Putt.Hud.wind_line(r, Arcade.Vec2.zero()), "Calm", "no wind"), expect_int(Putt.Hud.wind_force(r, Arcade.Vec2.vec2(w, w)), 10, "wind_max on both axes is 10"), expect_int(Putt.Hud.wind_force(r, Arcade.Vec2.vec2(3.0 *. w, 3.0 *. w)), 30, "a hole that triples its wind reads 30"), expect_string(Putt.Hud.wind_line(r, Arcade.Vec2.vec2(0.0, 3.0 *. w)), "Wind 21", "and says so"), expect_int(Putt.Hud.wind_force(r, Arcade.Vec2.vec2(0.0 -. w, 0.0)), 7, "wind_max along one axis is 7"), expect_string(Putt.Hud.wind_line(r, Arcade.Vec2.vec2(0.0, w /. 2.0)), "Wind 4", "half of that is 4"), expect_int(List.length(Putt.Hud.compass_ops(r, Arcade.Vec2.vec2(50.0, 50.0), Arcade.Vec2.zero())), 2, "a still compass is a ring and a dot"), expect_int(List.length(Putt.Hud.compass_ops(r, Arcade.Vec2.vec2(50.0, 50.0), Arcade.Vec2.vec2(w, 0.0))), 3, "a windy one a ring, a shaft and a head")])
+  end
+
+  fn pull_word_cases() : Outcome do
+    all([expect_string(Putt.Hud.pull_line(aim(), pull(0.0, 5.0)), "Let go here to cancel", "inside the dead zone"), expect_string(Putt.Hud.pull_line(aim(), pull(0.0, 86.0)), "Power 50%", "a half pull"), expect_string(Putt.Hud.pull_line(aim(), pull(120.0, 160.0)), "Power 100%", "past the full pull")])
+  end
+
+  -- ---- The card ----
+  fn card_cases() : Outcome do
+    let s = Putt.Rules.new_game(rs(), Arcade.U64.of_int(2026))
+    let n = Putt.Course.hole_count()
+    let pars = Putt.Hud.card_pars()
+    let one = { s with card: pars_plus(pars, 1, 1, []) }
+    let done =
+      { s with hole: n - 1, card: pars_plus(pars, n, 1, []), phase: PuttCourseDone }
+    let strokes = Putt.Hud.card_strokes(one)
+    let par = Putt.Course.course_par()
+    all([expect_int(List.length(Putt.Hud.card_numbers()), n, "a number a hole"), expect_int(List.length(pars), n, "a par a hole"), expect_int(List.length(strokes), n, "an entry a hole"), expect_string(Putt.Hud.strokes_text(List.head(strokes)), int_to_string(List.head(pars) + 1), "the finished hole's strokes"), expect_int(List.length(List.filter(strokes, fn x -> Option.is_none(x))), n - 1, "the rest not played"), expect_string(Putt.Hud.strokes_text(None), "-", "shown as a dash"), expect_int(Putt.Hud.par_through(n), par, "par through every hole is the course's"), expect_int(Putt.Hud.running(done), n, "one over on every hole"), expect_string(Putt.Hud.total_line(done), "Total " ++ int_to_string(par + n) ++ ", " ++ int_to_string(n) ++ " over par", "the total line"), expect_string(Putt.Hud.card_detail(done), int_to_string(par + n) ++ " strokes, par " ++ int_to_string(par), "the course in numbers"), expect_int(Putt.Hud.card_blocks(), (n + 8) / 9, "nine holes a block")])
+  end
+
+  -- ---- Layout: every hole, on a phone, a desktop and a phone on its side ----
+  fn fits(h : PuttHole, w : Float, ht : Float) : Bool do
+    let vp = Arcade.Camera.viewport(w, ht)
+    let l = Putt.Hud.projection(rs(), h, vp)
+    let lo = Putt.View.px(rs(), l, Arcade.Vec2.zero())
+    let hi = Putt.View.px(rs(), l, Arcade.Vec2.vec2(h.width, h.length))
+    let bands = Putt.Hud.top_band() +. Putt.Hud.bottom_band()
+    let room = Arcade.Num.max_float(ht -. bands, ht /. 2.0)
+    let top = (ht -. room) *. Putt.Hud.top_band() /. bands
+    let bottom = top +. room
+    lo.x >= 0.0 && hi.x <= w && hi.y >= top && lo.y <= bottom && hi.y < lo.y && lo.x < hi.x
+  end
+
+  fn misfits(hs : List(PuttHole), w : Float, ht : Float, bad : Int) : Int do
+    match hs do
+    Nil -> bad
+    Cons(h, rest) -> misfits(rest, w, ht, if fits(h, w, ht) do bad else bad + 1 end)
+    end
+  end
+
+  fn layout_cases() : Outcome do
+    let hs = Putt.Course.holes()
+    let h = lane()
+    let vp = Arcade.Camera.viewport(390.0, 844.0)
+    let l = Putt.Hud.projection(rs(), h, vp)
+    let mid = Putt.View.px(rs(), l, Arcade.Vec2.vec2(1.0, 4.0))
+    let b = Putt.Hud.new_game_box(vp)
+    let wide = Putt.Hud.new_game_box(Arcade.Camera.viewport(1280.0, 800.0))
+    all([expect_int(misfits(hs, 390.0, 844.0, 0), 0, "holes outside the room between the bands on a 390 x 844 phone"), expect_int(misfits(hs, 1280.0, 800.0, 0), 0, "on a 1280 x 800 desktop"), expect_int(misfits(hs, 844.0, 390.0, 0), 0, "on a phone on its side"), expect_int(misfits(hs, 320.0, 200.0, 0), 0, "on a screen too short for the bands"), near(mid.x, 195.0, 0.000001, "the lane's middle is across the middle"), near(mid.y, 104.0 +. 696.0 /. 2.0, 0.000001, "and half way between the top band (104 px) and the page's strip (44 px)"), near(Putt.View.scale_of(l), 696.0 /. 8.4, 0.000001, "8.4 m of lane and edge fill the 696 px between them"), expect(b.top >= 62.0 && b.bottom <= Putt.Hud.top_band() && b.right <= 390.0 && b.left >= 0.0, "the new-game button is in the top band's lower row"), expect(Putt.Hud.in_box(b, Putt.Hud.box_centre(b)) && !Putt.Hud.in_box(b, Arcade.Vec2.vec2(195.0, 422.0)), "its middle is inside it and the screen's is not"), expect(wide.right <= 640.0 +. 220.0 && wide.left >= 640.0, "on a wide screen it stays with the 440 px column")])
+  end
+
+  -- ---- The frame's text, from its canvas calls ----
+  fn fill_text(c : Arcade.Canvas.CanvasCall) : Option(String) do
+    match c do
+    CvFillText(s, _, _) -> Some(s)
+    _ -> None
+    end
+  end
+
+  fn texts(s : PuttState, moment : HudMoment) : String do
+    let r = rs()
+    let vp = Arcade.Camera.viewport(390.0, 844.0)
+    let cs =
+      Arcade.Canvas.calls(r.num, 2.0, 390.0, 844.0, Putt.Hud.frame(r, aim(), s, vp, s.ball, moment))
+    String.join(List.filter_map(cs, fill_text), "|")
+  end
+
+  fn frame_cases() : Outcome do
+    let s = Putt.Rules.new_game(rs(), Arcade.U64.of_int(2026))
+    let first = Putt.Rules.current(s)
+    let top =
+      Putt.Hud.hole_line(s) ++ "|" ++ Putt.Hud.par_line(s) ++ "|STROKE 1|Score E|" ++ Putt.Hud.wind_line(rs(), s.wind)
+    let done = { s with ball: first.cup, strokes: 1, card: [1], phase: PuttHoleDone }
+    let card = texts(done, HudWaiting)
+    all([expect_string(texts(s, HudWaiting), top ++ "|Drag back anywhere, let go to putt|New game", "a tee: the bands, the hint, the button"), expect_string(texts(s, HudPulling(pull(0.0, 86.0))), top ++ "|Power 50%|New game", "a held pull: its power for the hint"), expect_string(texts(s, HudRolling), top ++ "|New game", "a rolling putt: no hint"), expect(String.contains(card, "|Hole in one!|Hole 1: 1 stroke, par " ++ int_to_string(first.par) ++ "|Hole|1|"), "a finished hole: the card's headline and rows (" ++ card ++ ")"), expect(String.contains(card, "|You|1|"), "the strokes row"), expect(String.ends_with(card, "|" ++ Putt.Hud.total_line(done) ++ "|" ++ Putt.Hud.card_prompt(done)), "the total and the prompt last")])
+  end
+
+  fn cases() : List(Case) do
+    [
+      case("a pull is a putt: opposite the pull, power by its length", fn () -> pull_cases()),
+      case("every pull is no putt or one the rules accept", fn () -> round_trip()),
+      case("a reasonable pull sends the ball a reasonable distance, and the preview says where", fn () -> distance_cases()),
+      case("the preview: the cup, the lip and sand", fn () -> holing_cases()),
+      case("the bands' words", fn () -> word_cases()),
+      case("verdicts and scores against par", fn () -> verdict_cases()),
+      case("the wind's force and compass", fn () -> wind_cases()),
+      case("the power of a held pull, in words", fn () -> pull_word_cases()),
+      case("the scorecard has a column a hole", fn () -> card_cases()),
+      case("every hole fits between the bands", fn () -> layout_cases()),
+      case("the frame's text", fn () -> frame_cases())
+    ]
+  end
+
+end
