@@ -86,6 +86,73 @@ mod Putt.View do
     end
   end
 
+  -- Water: a flat pool with a lighter edge.
+  pfn pools(rs : PuttRules, l : Arcade.Camera.Projection, bs : List(PuttBox)) : List(DrawOp) needs () do
+    match bs do
+    Nil -> []
+    Cons(b, rest) -> do
+      Cons(FillShape(ring(rs, l, b), Flat(hex(3112897)), Over), Cons(StrokeShape(ring(rs, l, b), pen(hex(9422826), 2.0), Over), pools(rs, l, rest)))
+    end
+    end
+  end
+
+  doc """How far apart a slope's chevrons are, in course metres."""
+  fn chevron_pitch() : Float needs () do
+    0.5
+  end
+
+  -- One chevron centred on c, its point a tenth of a metre downhill along
+  -- the unit vector d.
+  pfn chevron(rs : PuttRules, l : Arcade.Camera.Projection, c : Arcade.Vec2.Vec2, d : Arcade.Vec2.Vec2) : List(PathStep) needs () do
+    let back = Arcade.Vec2.sub(c, Arcade.Vec2.scale(d, 0.04))
+    let across = Arcade.Vec2.scale(Arcade.Vec2.vec2(0.0 -. d.y, d.x), 0.09)
+    [
+      MoveTo(px(rs, l, Arcade.Vec2.add(back, across))),
+      LineTo(px(rs, l, Arcade.Vec2.add(c, Arcade.Vec2.scale(d, 0.1)))),
+      LineTo(px(rs, l, Arcade.Vec2.sub(back, across)))
+    ]
+  end
+
+  -- A row of chevrons at height y, from x on, a pitch apart, while inside b.
+  pfn chevron_row(rs : PuttRules, l : Arcade.Camera.Projection, b : PuttBox, d : Arcade.Vec2.Vec2, x : Float, y : Float) : List(PathStep) needs () do
+    if x < b.hi.x do
+      List.append(chevron(rs, l, Arcade.Vec2.vec2(x, y), d), chevron_row(rs, l, b, d, x +. chevron_pitch(), y))
+    else
+      []
+    end
+  end
+
+  pfn chevron_rows(rs : PuttRules, l : Arcade.Camera.Projection, b : PuttBox, d : Arcade.Vec2.Vec2, y : Float) : List(PathStep) needs () do
+    if y < b.hi.y do
+      List.append(chevron_row(rs, l, b, d, b.lo.x +. chevron_pitch() /. 2.0, y), chevron_rows(rs, l, b, d, y +. chevron_pitch()))
+    else
+      []
+    end
+  end
+
+  -- Sloping ground: a lighter green with chevrons pointing downhill, one
+  -- stroked outline for the whole slope. A slope with no pull has no downhill:
+  -- the course has none (the suite checks every hole), so that arm is never
+  -- reached, and aborts if it is.
+  pfn banks(rs : PuttRules, l : Arcade.Camera.Projection, ss : List(PuttSlope)) : List(DrawOp) needs () do
+    match ss do
+    Nil -> []
+    Cons(s, rest) -> do
+      let steep = Arcade.Vec2.length(s.pull)
+      if steep > 0.0 do
+        do
+          let d = Arcade.Vec2.scale(s.pull, 1.0 /. steep)
+          let marks =
+            chevron_rows(rs, l, s.area, d, s.area.lo.y +. chevron_pitch() /. 2.0)
+          Cons(FillShape(ring(rs, l, s.area), Flat(hex(5615706)), Over), Cons(StrokeShape(Outline(marks), pen(hex(2780723), 2.0), Over), banks(rs, l, rest)))
+        end
+      else
+        unreachable()
+      end
+    end
+    end
+  end
+
   pfn segment(a : Arcade.Vec2.Vec2, b : Arcade.Vec2.Vec2) : Shape needs () do
     Outline([MoveTo(a), LineTo(b)])
   end
@@ -157,15 +224,22 @@ mod Putt.View do
 
   doc """
   One frame with the ball at `ball`: a point of a putt's path while the
-  shell plays it back, or the state's own ball. Back to front: the ground,
-  the green, sand, the cup, the blocks, the rail, the ball, the wind and the
-  caption.
+  shell plays it back, or the state's own ball. Back to front: the hole
+  (field_ops), the ball, the wind and the caption.
   """
   fn scene_with_ball(rs : PuttRules, s : PuttState, vp : Arcade.Camera.Viewport, ball : Arcade.Vec2.Vec2) : List(DrawOp) needs () do
     let h = Putt.Rules.current(s)
     let l = projection(rs, h, vp)
+    List.concat([field_ops(rs, l, h), ball_ops(rs, l, ball), wind_ops(rs, vp, s.wind), [caption_op(s, vp)]])
+  end
+
+  doc """
+  The hole without the ball, through any projection: the ground, the green,
+  slopes, sand, water, the cup, the blocks and the rail, back to front.
+  """
+  fn field_ops(rs : PuttRules, l : Arcade.Camera.Projection, h : PuttHole) : List(DrawOp) needs () do
     let green = ring(rs, l, Putt.Course.bounds(h))
-    List.concat([[ClearTo(hex(1780258)), FillShape(green, Flat(hex(4168522)), Over)], flat(rs, l, h.sands, hex(14862730)), cup_ops(rs, l, h), walled(rs, l, h.blocks, hex(8014634), hex(5911832)), [StrokeShape(green, pen(hex(8014634), 6.0), Over)], ball_ops(rs, l, ball), wind_ops(rs, vp, s.wind), [caption_op(s, vp)]])
+    List.concat([[ClearTo(hex(1780258)), FillShape(green, Flat(hex(4168522)), Over)], banks(rs, l, h.slopes), flat(rs, l, h.sands, hex(14862730)), pools(rs, l, h.waters), cup_ops(rs, l, h), walled(rs, l, h.blocks, hex(8014634), hex(5911832)), [StrokeShape(green, pen(hex(8014634), 6.0), Over)]])
   end
 
 end

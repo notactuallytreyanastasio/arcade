@@ -76,9 +76,10 @@ mod Putt.Rules do
     (vec2((ux *. 2.0 -. 1.0) *. w, (uy *. 2.0 -. 1.0) *. w), r2)
   end
 
+  -- The hole's wind is the draw times its `gust`: past wind_max where gust > 1.
   pfn tee_up(rs : PuttRules, s : PuttState, i : Int, h : PuttHole) : PuttState needs () do
-    let (wind, r) = draw_wind(rs, s.rng)
-    { s with rng: r, hole: i, ball: h.tee, strokes: 0, wind: wind, phase: PuttAiming }
+    let (drawn, r) = draw_wind(rs, s.rng)
+    { s with rng: r, hole: i, ball: h.tee, strokes: 0, wind: scale(drawn, h.gust), phase: PuttAiming }
   end
 
   doc """A new game from a seed, on the first hole's tee."""
