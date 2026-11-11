@@ -6,17 +6,22 @@ mod PuttShell do
   -- says what they mean for putt:
   --
   --   boot      the launch seed to Putt.Rules.new_game, and the speakers
-  --   pointer   a drag's samples, measured on lift as a flick
-  --             (Arcade.Physics.Gesture), become a putt (shot_of_flick);
-  --             a tap on a finished hole tees up the next, and on a
-  --             finished course starts a new game
+  --   pointer   a press, a drag away from the target and a release are a
+  --             putt (Putt.Aim.shot_of_pull); while the pointer is down
+  --             the frame shows what the putt would do. A release inside
+  --             the dead zone is no putt. A tap on a finished hole tees up
+  --             the next, and on a finished course starts a new game; a
+  --             press and release on the new-game button starts one at any
+  --             time
   --   tick      a struck putt is played back along its sampled path, at
   --             real time, sending Putt.Cues.audio_between each frame;
   --             the state moves on to the turn's `after` when it ends
   --   effects   audio commands to Arcade.Web.Audio
   --   marks     what the playtest reads off <html>
   --
-  -- Every rule is in Putt.Rules; nothing here decides how the ball rolls.
+  -- Every rule is in Putt.Rules, the pull's meaning in Putt.Aim and every
+  -- word and shape of the frame in Putt.Hud; nothing here decides how the
+  -- ball rolls or what the player reads.
   needs IO.Foreign
 
   -- A struck putt being shown: the state it was struck from (the hole and
@@ -30,12 +35,18 @@ mod PuttShell do
     reached : Float
   }
 
+  -- A pointer held down: where it pressed and where it is now, CSS pixels.
+  -- Only a press made while no putt is rolling is kept, so a finger already
+  -- down when the ball drops cannot tap the scorecard away.
+  type PuttDrag = { pressed : Vec2, now : Vec2 }
+
   type PuttModel = {
     rs : PuttRules,
+    aim : AimTuning,
     game : PuttState,
     view_w : Float,
     view_h : Float,
-    drag : List(TrackPoint),
+    drag : Option(PuttDrag),
     shown : Option(PuttPlayback),
     putts : Int
   }
@@ -78,10 +89,11 @@ mod PuttShell do
     let m =
       {
         rs: rs,
+        aim: Putt.Aim.tuning(),
         game: Putt.Rules.new_game(rs, seed),
         view_w: w,
         view_h: h,
-        drag: [],
+        drag: None,
         shown: None,
         putts: 0
       }
@@ -93,39 +105,72 @@ mod PuttShell do
     match x do
     PmTick(t) -> tick(m, t)
     PmResize(w, h) -> quiet({ m with view_w: w, view_h: h })
-    PmDown(ps) -> quiet({ m with drag: List.reverse(ps) })
-    PmMove(ps) -> quiet({ m with drag: List.append(List.reverse(ps), m.drag) })
-    PmUp(ps) -> lift(m, List.reverse(List.append(List.reverse(ps), m.drag)))
-    PmCancel -> quiet({ m with drag: [] })
+    PmDown(ps) -> quiet(pressed(m, ps))
+    PmMove(ps) -> quiet(moved(m, ps))
+    PmUp(ps) -> lift(moved(m, ps), ps)
+    PmCancel -> quiet({ m with drag: None })
     PmVisible(_) -> quiet(m)
     end
   end
 
-  -- A pointer lifted, its whole track oldest first. While a putt is shown
-  -- every touch is ignored.
-  fn lift(m0 : PuttModel, track : List(TrackPoint)) : (PuttModel, List(PuttFx)) do
-    let m = { m0 with drag: [] }
+  -- The newest of a batch of samples, as (time, place).
+  fn newest(ps : List(TrackPoint)) : Option((Float, Vec2)) do
+    match ps do
+    Nil -> None
+    Cons(p, Nil) -> Some((p.gt, Arcade.Vec2.vec2(p.gx, p.gy)))
+    Cons(_, rest) -> newest(rest)
+    end
+  end
+
+  fn pressed(m : PuttModel, ps : List(TrackPoint)) : PuttModel do
     match m.shown do
-    Some(_) -> quiet(m)
+    Some(_) -> { m with drag: None }
     None -> do
-      match m.game.phase do
-      PuttAiming -> flicked(m, track)
-      PuttHoleDone -> next(m)
-      PuttCourseDone -> again(m)
+      match newest(ps) do
+      Some((_, at)) -> { m with drag: Some({ pressed: at, now: at }) }
+      None -> { m with drag: None }
       end
     end
     end
   end
 
-  fn flicked(m : PuttModel, track : List(TrackPoint)) : (PuttModel, List(PuttFx)) do
-    match Arcade.Physics.Gesture.measure(track, Arcade.Physics.Gesture.flick_limits()) do
-    None -> quiet(m)
-    Some(metrics) -> do
-      match Putt.Rules.shot_of_flick(m.rs, metrics) do
-      None -> quiet(m)
-      Some(shot) -> strike(m, shot, metrics.ended_at)
+  fn moved(m : PuttModel, ps : List(TrackPoint)) : PuttModel do
+    match m.drag do
+    None -> m
+    Some(d) -> do
+      match newest(ps) do
+      Some((_, at)) -> { m with drag: Some({ d with now: at }) }
+      None -> m
       end
     end
+    end
+  end
+
+  -- The pointer lifted, the drag already moved to where it did. A press and
+  -- release both on the new-game button is a new game whatever the phase.
+  fn lift(m0 : PuttModel, ps : List(TrackPoint)) : (PuttModel, List(PuttFx)) do
+    let m = { m0 with drag: None }
+    match m0.drag do
+    None -> quiet(m)
+    Some(d) -> do
+      let button = Putt.Hud.new_game_box(Arcade.Camera.viewport(m.view_w, m.view_h))
+      if Putt.Hud.in_box(button, d.pressed) && Putt.Hud.in_box(button, d.now) do
+        again(m)
+      else
+        match m.game.phase do
+        PuttAiming -> released(m, d, ps)
+        PuttHoleDone -> next(m)
+        PuttCourseDone -> again(m)
+        end
+      end
+    end
+    end
+  end
+
+  fn released(m : PuttModel, d : PuttDrag, ps : List(TrackPoint)) : (PuttModel, List(PuttFx)) do
+    match (Putt.Aim.shot_of_pull(m.rs, m.aim, Arcade.Vec2.sub(d.now, d.pressed)), newest(ps)) do
+    (Some(shot), Some((at, _))) -> strike(m, shot, at)
+    (_, _) -> quiet(m)
     end
   end
 
@@ -206,11 +251,18 @@ mod PuttShell do
   fn scene(m : PuttModel) : List(DrawOp) do
     let vp = Arcade.Camera.viewport(m.view_w, m.view_h)
     match m.shown do
-    None -> Putt.View.scene(m.rs, m.game, vp)
+    None -> Putt.Hud.frame(m.rs, m.aim, m.game, vp, m.game.ball, moment(m))
     Some(p) -> do
       let at = ball_at(p.turn.rolled, p.reached, p.from_state.ball)
-      Putt.View.scene_with_ball(m.rs, p.from_state, vp, at)
+      Putt.Hud.frame(m.rs, m.aim, p.from_state, vp, at, HudRolling)
     end
+    end
+  end
+
+  fn moment(m : PuttModel) : HudMoment do
+    match m.drag do
+    None -> HudWaiting
+    Some(d) -> HudPulling(Arcade.Vec2.sub(d.now, d.pressed))
     end
   end
 
@@ -244,21 +296,59 @@ mod PuttShell do
     end
   end
 
-  -- What the playtest reads off <html>: the phase, the hole (1-based), the
-  -- strokes on it, whether a putt is being shown, and the putts struck.
+  fn num(x : Float) : String do
+    Arcade.Draw.css_number(x)
+  end
+
+  fn place(p : Vec2) : String do
+    num(p.x) ++ "," ++ num(p.y)
+  end
+
+  -- The pull being held as the frame shows it: the putt's power in m/s, the
+  -- metres its first leg covers and whether that leg ends in the cup. Empty
+  -- with no pull, or one inside the dead zone.
+  fn aim_marks(m : PuttModel) : List((String, String)) do
+    let held =
+      match (m.drag, m.game.phase) do
+      (Some(d), PuttAiming) -> Putt.Aim.shot_of_pull(m.rs, m.aim, Arcade.Vec2.sub(d.now, d.pressed))
+      (_, _) -> None
+      end
+    match held do
+    None -> [("data-aim-power", ""), ("data-aim-reach", ""), ("data-aim-holes", "")]
+    Some(shot) -> do
+      let seen =
+        Putt.Aim.preview(m.rs, m.aim, Putt.Rules.current(m.game), m.game.ball, shot)
+      [
+        ("data-aim-power", num(shot.power)),
+        ("data-aim-reach", num(seen.reach)),
+        ("data-aim-holes", if seen.holes do "1" else "0" end)
+      ]
+    end
+    end
+  end
+
+  -- What the playtest reads off <html>: the phase, the hole (1-based) of
+  -- how many, the strokes on it, whether a putt is being shown, the putts
+  -- struck; the ball and the cup in course metres and the ball on screen;
+  -- the card, the total and whether the hole just finished was holed; the
+  -- held pull (aim_marks); what the bands say; the middle of the new-game
+  -- button and the pull that is a full-power putt, in CSS pixels.
   fn marks(m : PuttModel) : List((String, String)) do
     let rolling =
       match m.shown do
       Some(_) -> "1"
       None -> "0"
       end
-    [
-      ("data-phase", phase_name(m.game.phase)),
-      ("data-hole", int_to_string(m.game.hole + 1)),
-      ("data-strokes", int_to_string(m.game.strokes)),
-      ("data-rolling", rolling),
-      ("data-putts", int_to_string(m.putts))
-    ]
+    let h = Putt.Rules.current(m.game)
+    let vp = Arcade.Camera.viewport(m.view_w, m.view_h)
+    let l = Putt.Hud.projection(m.rs, h, vp)
+    let result =
+      match m.game.phase do
+      PuttAiming -> ""
+      PuttHoleDone -> if Putt.Hud.holed(m.game) do "holed" else "picked-up" end
+      PuttCourseDone -> "course"
+      end
+    List.append([("data-phase", phase_name(m.game.phase)), ("data-hole", int_to_string(m.game.hole + 1)), ("data-holes", int_to_string(Putt.Course.hole_count())), ("data-strokes", int_to_string(m.game.strokes)), ("data-rolling", rolling), ("data-putts", int_to_string(m.putts)), ("data-ball", place(m.game.ball)), ("data-cup", place(h.cup)), ("data-ball-px", place(Putt.View.px(m.rs, l, m.game.ball))), ("data-px-per-m", num(Putt.View.scale_of(l))), ("data-card", String.join(List.map(m.game.card, int_to_string), ",")), ("data-total", int_to_string(Putt.Rules.total(m.game))), ("data-result", result), ("data-hud", Putt.Hud.hole_line(m.game) ++ " | " ++ Putt.Hud.par_line(m.game) ++ " | " ++ Putt.Hud.stroke_line(m.game) ++ " | " ++ Putt.Hud.score_line(m.game) ++ " | " ++ Putt.Hud.wind_line(m.rs, m.game.wind)), ("data-card-title", Putt.Hud.card_title(m.game)), ("data-new-game", place(Putt.Hud.box_centre(Putt.Hud.new_game_box(vp)))), ("data-pull-full", num(m.aim.full))], aim_marks(m))
   end
 
   -- ---- Launch ----
