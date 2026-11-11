@@ -1,13 +1,14 @@
 # Putt
 
-Top-down mini-golf on the arcade engine, and the engine's second game: four
+Top-down mini-golf on the arcade engine, and the engine's second game: nine
 one-screen holes, a flick to putt, walls and blocks the ball bounces off, sand
-that slows it, and a wind on every hole drawn from the game's seed. It uses
-only `Arcade.*` modules; nothing in it knows about any other game.
+that slows it, water that sends it back, slopes that turn it, and a wind on
+every hole drawn from the game's seed. It uses only `Arcade.*` modules;
+nothing in it knows about any other game.
 
 ```
 forge.toml              app; [deps] arcade, arcade_physics by path; [dev-deps] arcade_testkit
-lib/putt/course.march   Putt.Course: the holes (walls, blocks, sand, tee, cup, par)
+lib/putt/course.march   Putt.Course: the nine holes (walls, blocks, sand, water, slopes, gust, tee, cup, par)
 lib/putt/roll.march     Putt.Roll: one putt rolled out (Arcade.Physics.Sim + Kinematics)
 lib/putt/rules.march    Putt.Rules: state, actions, play/apply, resume (Arcade.Replay), shot_of_flick (Arcade.Physics.Gesture)
 lib/putt/view.march     Putt.View: orthographic Arcade.Camera and a frame's Arcade.Draw ops
@@ -46,15 +47,51 @@ six strokes (picked up).
 The wind is the only random thing. `new_game` seeds an `Arcade.Rng`, and each
 tee draws two units from it, so a game is its seed plus the actions it
 accepted: `resume(rules(), seed, actions)` replays them with
-`Arcade.Replay.replay`.
+`Arcade.Replay.replay`. Each draw is a pull of up to 0.04 m/s^2 along an
+axis, times the hole's `gust`: 1 everywhere but the eighth hole, where it is
+3.
 
 The roll is a fixed 1/256 s step: friction against the direction of travel
-(five times as much in sand) plus the wind as a steady pull, then the rails,
-then the blocks, then the cup, which takes a ball over it at 1.25 m/s or less
-and lets a faster one lip out. It uses only `+ - * /` and `sqrt`, which every
-target rounds alike, so a game is bit-identical natively and on JS. The suite
-pins that: the final-state and turn-by-turn digests of a seeded bot game, and
-a frame's 82 canvas calls, are one constant for both targets.
+(five times as much in sand) plus, as a steady pull, the wind and the slope
+the ball is on; then the rails, then the blocks, then water, then the cup,
+which takes a ball over it at 1.25 m/s or less and lets a faster one lip out.
+A ball whose centre enters water ends the roll there and is played again from
+where it was struck, the stroke counted. A slope is a box with a pull in
+m/s^2; a ball at rest on one stays put. It all uses only `+ - * /` and
+`sqrt`, which every target rounds alike, so a game is bit-identical natively
+and on JS. The suite pins that: the final-state and turn-by-turn digests of
+seeded bot games, and three tees' canvas calls (82 on the first, which has
+neither water nor slope), are one constant for both targets.
+
+## The course
+
+Par 27. Every hole is a walled rectangle; `Putt.Course.holes()` is the list.
+
+| # | Hole | Par | Size (m) | What it asks |
+|---|------|-----|----------|--------------|
+| 1 | Straight | 2 | 1.6 x 6.0 | Pace: 4.6 m, nothing in the way. |
+| 2 | Bunker | 3 | 2.4 x 6.5 | Sand from the right wall across the line, a 0.6 m lane of green on the left: through it hard, round it in two, or off the left wall. |
+| 3 | Bank | 3 | 3.0 x 6.0 | A block across the middle with 0.5 m either side: the line off a side wall passes the gap as it bounces. |
+| 4 | Dogleg | 3 | 4.0 x 5.0 | The cup is out of sight round a corner; sand in the outside corner takes a lay-up hit too hard. |
+| 5 | Pond | 3 | 3.2 x 6.5 | Water on the line. The wide way round (0.9 m) is sand, the narrow way (0.6 m) is clean. |
+| 6 | Chicane | 3 | 3.0 x 6.5 | Two walls, the first open 0.6 m on the left, the second 0.6 m on the right, sand on the diagonal between. |
+| 7 | Sidehill | 3 | 3.2 x 6.5 | The top half slopes right at 0.3 m/s^2 toward water, the cup on the slope: aim above it. |
+| 8 | Causeway | 3 | 3.6 x 7.2 | A 0.6 m causeway between two ponds, a third pond 0.6 m behind the cup, and three times the wind. |
+| 9 | Home | 4 | 4.2 x 7.2 | Three legs round two walls: water past the first gap, sand on the line to the second, then along a slope that runs up to water, the cup on it. |
+
+Every hole can be holed: the suite's bot rolls a ring of 48 directions at 8
+powers with `Putt.Roll.roll` before each stroke, refines round the best, and
+holes all nine at par or better under two seeds' winds (14 strokes for
+seed 2026, 13 for seed 7), the same game on native and JS. The suite also checks each hole is
+sound (tee and cup on open green, boxes inside the hole, slopes and gusted
+wind together under the green's drag so a ball always rests, a way round to
+the cup) and pins the card of a plain player who putts at the next corner
+with flat-green pace and reads nothing: 2 3 3 2, picked up on Pond and Chicane, 3 on Sidehill, picked
+up on Causeway and Home, 37 strokes for seed 2026.
+
+Not checked by anything: the pars, and how the holes play by hand. The pars
+were set from the layouts and from simulated players (in the commit that
+added the course), not from people playing.
 
 ## In the browser
 

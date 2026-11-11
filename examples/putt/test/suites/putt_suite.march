@@ -2,9 +2,9 @@ mod Putt.Suite.Game do
 
   -- Putt against itself: replays are deterministic (the same seed and actions
   -- give the same digest, and native and JS give the digest pinned here), a
-  -- frame's canvas calls are pinned, each hole's outcome under a fixed bot is
-  -- one row, and the physics and gesture cases are small enough to solve by
-  -- hand. The pinned numbers were taken once from a run and are the same on
+  -- bot that looks before it putts holes out every hole of the course under
+  -- two seeds' winds, a frame's canvas calls are pinned, and the physics and
+  -- gesture cases are small enough to solve by hand. The pinned numbers were taken once from a run and are the same on
   -- both targets: the game uses only + - * / and sqrt.
   import Arcade.Test.Harness
 
@@ -70,14 +70,243 @@ mod Putt.Suite.Game do
     Arcade.Test.Digest.list(b, t.rolled, sample_digest)
   end
 
-  -- ---- A bot: aim at the cup, with the speed that would just reach it on
-  -- the green, and a little more ----
-  fn bot_shot(r : PuttRules, s : PuttState) : PuttShot do
+  -- ---- A bot that looks before it putts ----
+  -- For each stroke it rolls a ring of 48 directions at 8 powers with
+  -- Putt.Roll.roll, keeps the putt that drops or else rests with the least
+  -- way left to the cup, and refines round that one three times. The way
+  -- left is measured round the blocks and the water: the shortest path over
+  -- the points just off their corners. Directions come from points on a
+  -- square, not from sin and cos, so the bot plays the same game on every
+  -- target.
+  type PuttBotNode = { spot : Arcade.Vec2.Vec2, left : Float }
+
+  type PuttBotView = {
+    rules : PuttRules,
+    hole : PuttHole,
+    wind : Arcade.Vec2.Vec2,
+    from : Arcade.Vec2.Vec2,
+    barriers : List(PuttBox),
+    nodes : List(PuttBotNode)
+  }
+
+  type PuttBotTry = { shot : PuttShot, way_left : Float }
+
+  fn far() : Float do
+    1000000.0
+  end
+
+  fn grown(b : PuttBox, m : Float) : PuttBox do
+    Putt.Course.box(b.lo.x -. m, b.lo.y -. m, b.hi.x +. m, b.hi.y +. m)
+  end
+
+  fn grown_all(bs : List(PuttBox), m : Float) : List(PuttBox) do
+    grown_onto(bs, m, [])
+  end
+
+  fn grown_onto(bs : List(PuttBox), m : Float, acc : List(PuttBox)) : List(PuttBox) do
+    match bs do
+    Nil -> List.reverse(acc)
+    Cons(b, rest) -> grown_onto(rest, m, Cons(grown(b, m), acc))
+    end
+  end
+
+  -- What a path must go round, a little larger than drawn.
+  fn barriers_of(h : PuttHole) : List(PuttBox) do
+    grown_all(List.append(h.blocks, h.waters), 0.015)
+  end
+
+  -- The part of a line o + t d, t in [0, 1], between lo and hi: (t0, t1),
+  -- empty when t0 > t1.
+  fn slab(o : Float, d : Float, lo : Float, hi : Float) : (Float, Float) do
+    if d == 0.0 do
+      if o < lo || o > hi do (2.0, -1.0) else (0.0, 1.0) end
+    else
+      do
+        let a = (lo -. o) /. d
+        let b = (hi -. o) /. d
+        (Arcade.Num.min_float(a, b), Arcade.Num.max_float(a, b))
+      end
+    end
+  end
+
+  fn crosses(a : Arcade.Vec2.Vec2, b : Arcade.Vec2.Vec2, k : PuttBox) : Bool do
+    let (x0, x1) = slab(a.x, b.x -. a.x, k.lo.x, k.hi.x)
+    let (y0, y1) = slab(a.y, b.y -. a.y, k.lo.y, k.hi.y)
+    let t0 = Arcade.Num.max_float(Arcade.Num.max_float(x0, y0), 0.0)
+    let t1 = Arcade.Num.min_float(Arcade.Num.min_float(x1, y1), 1.0)
+    t0 <= t1
+  end
+
+  fn clear(bs : List(PuttBox), a : Arcade.Vec2.Vec2, b : Arcade.Vec2.Vec2) : Bool do
+    match bs do
+    Nil -> true
+    Cons(k, rest) -> if crosses(a, b, k) do false else clear(rest, a, b) end
+    end
+  end
+
+  -- The least way to the cup from p by one clear line to a node and then
+  -- the node's own way, or `best` if that is less.
+  fn way_via(bs : List(PuttBox), p : Arcade.Vec2.Vec2, nodes : List(PuttBotNode), best : Float) : Float do
+    match nodes do
+    Nil -> best
+    Cons(n, rest) -> do
+      let d = Arcade.Vec2.length(Arcade.Vec2.sub(p, n.spot)) +. n.left
+      if d < best && clear(bs, p, n.spot) do
+        way_via(bs, p, rest, d)
+      else
+        way_via(bs, p, rest, best)
+      end
+    end
+    end
+  end
+
+  fn relaxed(bs : List(PuttBox), todo : List(PuttBotNode), nodes : List(PuttBotNode), acc : List(PuttBotNode)) : List(PuttBotNode) do
+    match todo do
+    Nil -> List.reverse(acc)
+    Cons(n, rest) -> do
+      relaxed(bs, rest, nodes, Cons({ spot: n.spot, left: way_via(bs, n.spot, nodes, n.left) }, acc))
+    end
+    end
+  end
+
+  fn relaxed_times(bs : List(PuttBox), nodes : List(PuttBotNode), n : Int) : List(PuttBotNode) do
+    if n <= 0 do
+      nodes
+    else
+      relaxed_times(bs, relaxed(bs, nodes, nodes, []), n - 1)
+    end
+  end
+
+  -- The points a fifth of a metre off each barrier's corners that are on
+  -- the green, onto `acc`.
+  fn corner_nodes(h : PuttHole, bs : List(PuttBox), todo : List(PuttBox), acc : List(PuttBotNode)) : List(PuttBotNode) do
+    match todo do
+    Nil -> acc
+    Cons(b, rest) -> do
+      let green = grown(Putt.Course.bounds(h), -0.05)
+      let spots =
+        List.filter(Putt.Course.corners(grown(b, 0.2)), fn p -> Putt.Course.inside(green, p) && !Putt.Course.inside_any(bs, p))
+      corner_nodes(h, bs, rest, List.append(acc, List.map(spots, fn p -> { spot: p, left: far() })))
+    end
+    end
+  end
+
+  fn nodes_of(h : PuttHole) : List(PuttBotNode) do
+    let bs = barriers_of(h)
+    relaxed_times(bs, corner_nodes(h, bs, bs, [{ spot: h.cup, left: 0.0 }]), 5)
+  end
+
+  doc """The way left to the cup from p on hole h, round its blocks and water."""
+  fn way_left(h : PuttHole, p : Arcade.Vec2.Vec2) : Float do
+    way_via(barriers_of(h), p, nodes_of(h), far())
+  end
+
+  fn bot_view(r : PuttRules, s : PuttState) : PuttBotView do
     let h = Putt.Rules.current(s)
-    let gap = Arcade.Vec2.sub(h.cup, s.ball)
-    let reach = Math.sqrt(2.0 *. r.tune.green_drag *. Arcade.Vec2.length(gap))
-    let power = Arcade.Num.clamp(reach *. 1.1 +. 0.15, r.tune.min_power, r.tune.max_power)
-    { aim: gap, power: power }
+    {
+      rules: r,
+      hole: h,
+      wind: s.wind,
+      from: s.ball,
+      barriers: barriers_of(h),
+      nodes: nodes_of(h)
+    }
+  end
+
+  -- A putt tried: better than `best` if it drops (-1) or leaves less way.
+  fn tried(v : PuttBotView, aim : Arcade.Vec2.Vec2, power : Float, best : PuttBotTry) : PuttBotTry do
+    let tune = v.rules.tune
+    if power < tune.min_power || power > tune.max_power do
+      best
+    else
+      do
+        let dir = Arcade.Vec2.normalized(aim)
+        let e =
+          Putt.Roll.roll(tune, v.hole, v.wind, v.from, Arcade.Vec2.scale(dir, power))
+        let left =
+          if e.holed do
+            -1.0
+          else
+            way_via(v.barriers, e.rest, v.nodes, far())
+          end
+        if left < best.way_left do
+          { shot: { aim: dir, power: power }, way_left: left }
+        else
+          best
+        end
+      end
+    end
+  end
+
+  -- Direction k of 48, anticlockwise round a square of half-side 6.
+  fn ring_aim(k : Int) : Arcade.Vec2.Vec2 do
+    let side = k / 12
+    let o = int_to_float(k % 12 - 6)
+    if side == 0 do
+      Arcade.Vec2.vec2(6.0, o)
+    else
+      if side == 1 do
+        Arcade.Vec2.vec2(0.0 -. o, 6.0)
+      else
+        if side == 2 do
+          Arcade.Vec2.vec2(-6.0, 0.0 -. o)
+        else
+          Arcade.Vec2.vec2(o, -6.0)
+        end
+      end
+    end
+  end
+
+  fn ring_power(m : Int) : Float do
+    0.5 +. 0.5 *. int_to_float(m)
+  end
+
+  fn ring(v : PuttBotView, k : Int, m : Int, best : PuttBotTry) : PuttBotTry do
+    if k >= 48 do
+      best
+    else
+      if m >= 8 do
+        ring(v, k + 1, 0, best)
+      else
+        ring(v, k, m + 1, tried(v, ring_aim(k), ring_power(m), best))
+      end
+    end
+  end
+
+  -- The 25 putts round `mid`: its aim turned by a, 2a either way, its power
+  -- changed by p, 2p.
+  fn round_about(v : PuttBotView, mid : PuttShot, a : Float, p : Float, i : Int, j : Int, best : PuttBotTry) : PuttBotTry do
+    if i > 2 do
+      best
+    else
+      if j > 2 do
+        round_about(v, mid, a, p, i + 1, -2, best)
+      else
+        do
+          let across = Arcade.Vec2.vec2(0.0 -. mid.aim.y, mid.aim.x)
+          let aim =
+            Arcade.Vec2.add(mid.aim, Arcade.Vec2.scale(across, a *. int_to_float(i)))
+          round_about(v, mid, a, p, i, j + 1, tried(v, aim, mid.power +. p *. int_to_float(j), best))
+        end
+      end
+    end
+  end
+
+  fn refined(v : PuttBotView, t : PuttBotTry, a : Float, p : Float) : PuttBotTry do
+    round_about(v, t.shot, a, p, -2, -2, t)
+  end
+
+  fn bot_shot(r : PuttRules, s : PuttState) : PuttShot do
+    let v = bot_view(r, s)
+    let none =
+      {
+        shot: { aim: Arcade.Vec2.vec2(0.0, 1.0), power: r.tune.min_power },
+        way_left: far() *. 2.0
+      }
+    let coarse = ring(v, 0, 0, none)
+    let fine =
+      refined(v, refined(v, refined(v, coarse, 0.055, 0.17), 0.018, 0.055), 0.006, 0.018)
+    fine.shot
   end
 
   fn bot(r : PuttRules, s : PuttState) : Option(PuttAction) do
@@ -86,6 +315,49 @@ mod Putt.Suite.Game do
     PuttHoleDone -> Some(PuttNext)
     PuttCourseDone -> None
     end
+  end
+
+  -- ---- A plain player: putts at the next point on the shortest way to the
+  -- cup, with the speed that would stop there on flat green (a little more
+  -- at the cup itself). It reads no wind, sand, slope or bank, so its card
+  -- is a measure of how much each hole asks ----
+  fn nearest_leg(bs : List(PuttBox), p : Arcade.Vec2.Vec2, nodes : List(PuttBotNode), best : PuttBotNode, way : Float) : PuttBotNode do
+    match nodes do
+    Nil -> best
+    Cons(n, rest) -> do
+      let d = Arcade.Vec2.length(Arcade.Vec2.sub(p, n.spot)) +. n.left
+      if d < way && clear(bs, p, n.spot) do
+        nearest_leg(bs, p, rest, n, d)
+      else
+        nearest_leg(bs, p, rest, best, way)
+      end
+    end
+    end
+  end
+
+  fn plain_shot(r : PuttRules, s : PuttState) : PuttShot do
+    let h = Putt.Rules.current(s)
+    let leg =
+      nearest_leg(barriers_of(h), s.ball, nodes_of(h), { spot: h.cup, left: 0.0 }, far())
+    let gap = Arcade.Vec2.sub(leg.spot, s.ball)
+    let reach = Math.sqrt(2.0 *. r.tune.green_drag *. Arcade.Vec2.length(gap))
+    let pace = if leg.left == 0.0 do reach *. 1.1 +. 0.15 else reach end
+    {
+      aim: gap,
+      power: Arcade.Num.clamp(pace, r.tune.min_power, r.tune.max_power)
+    }
+  end
+
+  fn plain(r : PuttRules, s : PuttState) : Option(PuttAction) do
+    match s.phase do
+    PuttAiming -> Some(PuttStrike(plain_shot(r, s)))
+    PuttHoleDone -> Some(PuttNext)
+    PuttCourseDone -> None
+    end
+  end
+
+  fn plain_game(seed : Int) : (PuttState, List(PuttAction), Option(PuttError)) do
+    Arcade.Replay.drive(rs(), Putt.Rules.apply, plain, Putt.Rules.new_game(rs(), seed_of(seed)), 200)
   end
 
   fn bot_game(seed : Int) : (PuttState, List(PuttAction), Option(PuttError)) do
@@ -116,16 +388,95 @@ mod Putt.Suite.Game do
     end
   end
 
+  -- The bot's game for seed 2026: replayed, digested, and one row per hole.
+  -- Every hole must be holed, none picked up, each at its par or better.
   fn replay_cases() : Outcome do
     let (end1, actions, why) = bot_game(2026)
     let (end2, taken, why2) = Putt.Rules.resume(rs(), seed_of(2026), actions)
-    let (other, _, _) = bot_game(7)
     let d1 = state_digest(Arcade.Test.Digest.start(), end1)
     let d2 = state_digest(Arcade.Test.Digest.start(), end2)
     let start = Putt.Rules.new_game(rs(), seed_of(2026))
     let full = played_digest(rs(), start, actions, Arcade.Test.Digest.start())
     let full_again = played_digest(rs(), start, actions, Arcade.Test.Digest.start())
-    all([expect_string(error_text(why), "none", "the bot is never refused"), expect(Putt.Rules.phase_rank(end1.phase) == 2, "the bot finishes the course"), expect_int(taken, List.length(actions), "every action replays"), expect_string(error_text(why2), "none", "the replay is never refused"), expect_int(d2, d1, "resume reaches the state the game reached"), expect_int(full_again, full, "playing the actions twice tells the same"), expect_int(d1, 1576694532, "final state digest, seed 2026 (pinned)"), expect_int(full, 872715727, "every turn's digest, seed 2026 (pinned)"), expect_int(List.length(actions), 17, "actions the bot played (pinned)"), expect(state_digest(Arcade.Test.Digest.start(), other) != d1, "another seed, another game")])
+    let rows = outcome_rows(rs(), start, actions, [])
+    all([expect_string(error_text(why), "none", "the bot is never refused"), expect(Putt.Rules.phase_rank(end1.phase) == 2, "the bot finishes the course"), expect_int(taken, List.length(actions), "every action replays"), expect_string(error_text(why2), "none", "the replay is never refused"), expect_int(d2, d1, "resume reaches the state the game reached"), expect_int(full_again, full, "playing the actions twice tells the same"), expect_int(List.length(end1.card), 9, "nine holes on the card"), expect_string(over_par(end1.card), "", "holes the bot did not hole at par or better"), expect_string(String.join(rows, "; "), "1 Straight: holed in 1, par 2; 2 Bunker: holed in 2, par 3; 3 Bank: holed in 1, par 3; 4 Dogleg: holed in 1, par 3; 5 Pond: holed in 2, par 3; 6 Chicane: holed in 2, par 3; 7 Sidehill: holed in 1, par 3; 8 Causeway: holed in 2, par 3; 9 Home: holed in 2, par 4; course: 14, par 27", "one row per hole, seed 2026 (pinned)"), expect_int(d1, 3224452851, "final state digest, seed 2026 (pinned)"), expect_int(full, 1557432555, "every turn's digest, seed 2026 (pinned)"), expect_int(List.length(actions), 23, "actions the bot played (pinned)")])
+  end
+
+  -- The holes of a card not holed at par or better, by number: "" when all were.
+  fn over_par(card : List(Int)) : String do
+    String.join(over_par_from(card, Putt.Course.holes(), 1, []), " ")
+  end
+
+  fn over_par_from(card : List(Int), holes : List(PuttHole), i : Int, acc : List(String)) : List(String) do
+    match (card, holes) do
+    (Cons(n, card_rest), Cons(h, holes_rest)) -> do
+      if n <= h.par do
+        over_par_from(card_rest, holes_rest, i + 1, acc)
+      else
+        over_par_from(card_rest, holes_rest, i + 1, Cons(int_to_string(i) ++ ":" ++ int_to_string(n), acc))
+      end
+    end
+    _ -> List.reverse(acc)
+    end
+  end
+
+  -- Another seed is another wind on every hole: the bot holes out all nine
+  -- again, in a different game.
+  fn other_seed_cases() : Outcome do
+    let (end7, actions, why) = bot_game(7)
+    let rows = outcome_rows(rs(), Putt.Rules.new_game(rs(), seed_of(7)), actions, [])
+    all([expect_string(error_text(why), "none", "the bot is never refused"), expect(Putt.Rules.phase_rank(end7.phase) == 2, "the bot finishes the course"), expect_string(over_par(end7.card), "", "holes the bot did not hole at par or better"), expect_string(String.join(rows, "; "), "1 Straight: holed in 1, par 2; 2 Bunker: holed in 2, par 3; 3 Bank: holed in 1, par 3; 4 Dogleg: holed in 1, par 3; 5 Pond: holed in 2, par 3; 6 Chicane: holed in 2, par 3; 7 Sidehill: holed in 1, par 3; 8 Causeway: holed in 1, par 3; 9 Home: holed in 2, par 4; course: 13, par 27", "one row per hole, seed 7 (pinned)"), expect_int(state_digest(Arcade.Test.Digest.start(), end7), 1920434179, "final state digest, seed 7 (pinned)")])
+  end
+
+  -- The plain player's card, seed 2026: what each hole asks of a player who
+  -- reads nothing. Where it finds water it plays the same putt again.
+  fn plain_cases() : Outcome do
+    let (end1, actions, why) = plain_game(2026)
+    let start = Putt.Rules.new_game(rs(), seed_of(2026))
+    let rows = outcome_rows(rs(), start, actions, [])
+    let winds = tee_winds(rs(), start, actions, [start.wind])
+    let r = rs()
+    let w = r.tune.wind_max
+    all([expect_string(error_text(why), "none", "the plain player is never refused"), expect(Putt.Rules.phase_rank(end1.phase) == 2, "and finishes the course"), expect_string(String.join(rows, "; "), "1 Straight: holed in 2, par 2; 2 Bunker: holed in 3, par 3; 3 Bank: holed in 3, par 3; 4 Dogleg: holed in 2, par 3; 5 Pond: picked up after 6, par 3; 6 Chicane: picked up after 6, par 3; 7 Sidehill: holed in 3, par 3; 8 Causeway: picked up after 6, par 3; 9 Home: picked up after 6, par 4; course: 37, par 27", "its rows, seed 2026 (pinned)"), expect_int(played_digest(rs(), start, actions, Arcade.Test.Digest.start()), 1299643495, "every turn's digest (pinned)"), expect_int(List.length(winds), 9, "a wind for every tee"), expect_string(winds_out(winds, Putt.Course.holes(), w, 1, []), "", "tees whose wind is past gust x wind_max"), expect(gusted(winds, w), "the causeway's wind is past wind_max for this seed")])
+  end
+
+  fn tee_winds(r : PuttRules, s : PuttState, actions : List(PuttAction), acc : List(Arcade.Vec2.Vec2)) : List(Arcade.Vec2.Vec2) do
+    match actions do
+    Nil -> List.reverse(acc)
+    Cons(a, rest) -> do
+      match Putt.Rules.play(r, a, s) do
+      Ok(t) -> do
+        if List.any(t.told, fn e -> event_name(e) == "teed off") do
+          tee_winds(r, t.after, rest, Cons(t.after.wind, acc))
+        else
+          tee_winds(r, t.after, rest, acc)
+        end
+      end
+      Err(_) -> List.reverse(acc)
+      end
+    end
+    end
+  end
+
+  fn winds_out(winds : List(Arcade.Vec2.Vec2), holes : List(PuttHole), w : Float, i : Int, acc : List(String)) : String do
+    match (winds, holes) do
+    (Cons(v, winds_rest), Cons(h, holes_rest)) -> do
+      let most = w *. h.gust
+      if Math.abs(v.x) <= most && Math.abs(v.y) <= most do
+        winds_out(winds_rest, holes_rest, w, i + 1, acc)
+      else
+        winds_out(winds_rest, holes_rest, w, i + 1, Cons(int_to_string(i), acc))
+      end
+    end
+    _ -> String.join(List.reverse(acc), " ")
+    end
+  end
+
+  fn gusted(winds : List(Arcade.Vec2.Vec2), w : Float) : Bool do
+    match List.nth_opt(winds, 7) do
+    Some(v) -> Math.abs(v.x) > w || Math.abs(v.y) > w
+    None -> false
+    end
   end
 
   fn refusal_cases() : Outcome do
@@ -178,17 +529,44 @@ mod Putt.Suite.Game do
     end
   end
 
-  fn row_case(got : List(String), i : Int, want : String) : Outcome do
-    match List.nth_opt(got, i) do
-    Some(row) -> expect_string(row, want, "row " ++ int_to_string(i + 1))
-    None -> Mismatch("row " ++ int_to_string(i + 1) ++ " missing, want " ++ want)
-    end
+  -- ---- The course itself: every hole is one a ball can be played on ----
+  fn fault(ok : Bool, what : String) : List(String) do
+    if ok do [] else [what] end
   end
 
-  fn hole_rows() : Outcome do
-    let (_, actions, _) = bot_game(2026)
-    let rows = outcome_rows(rs(), Putt.Rules.new_game(rs(), seed_of(2026)), actions, [])
-    all([expect_int(List.length(rows), 5, "four holes and the course"), row_case(rows, 0, "1 Straight: holed in 2, par 2"), row_case(rows, 1, "2 Bank: picked up after 6, par 3"), row_case(rows, 2, "3 Bunker: holed in 2, par 3"), row_case(rows, 3, "4 Gate: holed in 3, par 3"), row_case(rows, 4, "course: 13, par 11")])
+  fn box_faults(h : PuttHole, kind : String, bs : List(PuttBox)) : List(String) do
+    List.filter_map(bs, fn b -> if b.lo.x < b.hi.x && b.lo.y < b.hi.y && b.lo.x >= 0.0 && b.lo.y >= 0.0 && b.hi.x <= h.width && b.hi.y <= h.length do None else Some(kind ++ " out of the hole") end)
+  end
+
+  fn steepness(ss : List(PuttSlope)) : Float do
+    List.fold_left(ss, 0.0, fn (acc, x) -> acc +. Arcade.Vec2.length(x.pull))
+  end
+
+  -- What is wrong with a hole: nothing, for every hole of the course. The
+  -- tee and the cup are on open green a tenth of a metre from anything; every
+  -- box is inside the hole; every slope has a downhill; all the slopes and the
+  -- strongest gusted wind together pull less than the green's drag, so a ball
+  -- always comes to rest; and there is a way round to the cup.
+  fn hole_faults(r : PuttRules, h : PuttHole) : List(String) do
+    let solid = grown_all(List.append(h.blocks, h.waters), 0.1)
+    let green = grown(Putt.Course.bounds(h), -0.1)
+    let pull = steepness(h.slopes) +. h.gust *. r.tune.wind_max *. Math.sqrt(2.0)
+    let found =
+      List.concat([fault(h.par >= 2 && h.par < r.tune.stroke_cap, "par"), fault(Putt.Course.inside(green, h.tee), "tee off the green"), fault(Putt.Course.inside(green, h.cup), "cup off the green"), fault(!Putt.Course.inside_any(solid, h.tee), "tee in a block or water"), fault(!Putt.Course.inside_any(solid, h.cup), "cup in a block or water"), fault(!Putt.Course.inside_any(h.sands, h.tee), "tee in sand"), fault(!Putt.Course.inside_any(h.sands, h.cup), "cup in sand"), box_faults(h, "block", h.blocks), box_faults(h, "sand", h.sands), box_faults(h, "water", h.waters), box_faults(h, "slope", List.map(h.slopes, fn x -> x.area)), fault(List.all(h.slopes, fn x -> Arcade.Vec2.length(x.pull) > 0.0), "a slope with no pull"), fault(pull < 0.9 *. r.tune.green_drag, "slopes and wind pull as hard as the green drags"), fault(h.gust >= 1.0, "gust under 1"), fault(way_left(h, h.tee) < far(), "no way from the tee to the cup")])
+    List.map(found, fn what -> h.title ++ ": " ++ what)
+  end
+
+  fn course_cases() : Outcome do
+    let r = rs()
+    let holes = Putt.Course.holes()
+    let faults = List.concat(List.map(holes, fn h -> hole_faults(r, h)))
+    let titles = List.map(holes, fn h -> h.title)
+    let pars = List.map(holes, fn h -> int_to_string(h.par))
+    let first = Putt.Course.straight()
+    let bent = Putt.Course.dogleg()
+    let broken =
+      test_hole([Putt.Course.box(0.0, 3.0, 3.0, 3.4)], [], [], [Putt.Course.slope(0.0, 0.0, 3.0, 9.0, 0.7, 0.0)])
+    all([expect_string(String.join(faults, "; "), "", "faults in the course"), expect_string(String.join(hole_faults(r, broken), "; "), "Test: slope out of the hole; Test: slopes and wind pull as hard as the green drags; Test: no way from the tee to the cup", "a walled-off hole with a slope too steep and too long is faulted"), expect_int(Putt.Course.hole_count(), 9, "nine holes"), expect_string(String.join(titles, " "), "Straight Bunker Bank Dogleg Pond Chicane Sidehill Causeway Home", "in this order"), expect_string(String.join(pars, " "), "2 3 3 3 3 3 3 3 4", "their pars"), expect_int(Putt.Course.course_par(), 27, "par for the course"), expect(Putt.Course.max_gust() == 3.0, "the strongest gust is 3"), near(way_left(first, first.tee), 4.6, 0.000001, "the way left on an open hole is the straight line"), expect(way_left(bent, bent.tee) > 4.9, "round the dogleg it is longer than the 4.36 m line through the block")])
   end
 
   fn wind_cases() : Outcome do
@@ -213,8 +591,10 @@ mod Putt.Suite.Game do
     let tee = first.tee
     let soft = rolled(Putt.Course.straight(), 0.0, 1.0, 1.0)
     let side = rolled(Putt.Course.straight(), 1.0, 0.0, 2.0)
-    let banked = rolled(Putt.Course.bank(), 0.0, 1.0, 2.0)
-    let bunkered = rolled(Putt.Course.bunker(), 0.0, 1.0, 2.6)
+    let banked =
+      rolled(test_hole([Putt.Course.box(0.9, 2.7, 2.1, 3.1)], [], [], []), 0.0, 1.0, 2.0)
+    let bunkered =
+      rolled(test_hole([], [Putt.Course.box(0.9, 3.0, 2.1, 4.2)], [], []), 0.0, 1.0, 2.6)
     let sunk = rolled(Putt.Course.straight(), 0.0, 1.0, 2.45)
     let lipped = rolled(Putt.Course.straight(), 0.0, 1.0, 4.0)
     all([expect(soft.rest.x == tee.x, "a straight putt stays on its line"), near(soft.rest.y, tee.y +. 1.0 /. 1.2, 0.01, "and rolls v^2 / 2 drag"), expect(!soft.holed && List.is_empty(soft.met), "meeting nothing"), expect(met(side, BumpWall), "a putt at the side wall bounces"), expect(side.rest.x <= 1.6 -. 0.021 && side.rest.x >= 0.021, "and stays inside the rails"), expect(met(banked, BumpBlock), "a putt at the block bounces off it"), expect(banked.rest.y < 2.7, "and comes back short of it"), expect(met(bunkered, BumpSand), "a putt through the bunker enters the sand"), expect(bunkered.rest.y < 4.2, "and the sand stops it"), expect(sunk.holed, "a putt arriving slowly drops"), expect(Arcade.Vec2.equal(sunk.rest, first.cup), "and rests in the cup"), expect(met(lipped, BumpLip), "a putt arriving fast lips out"), expect(List.length(sunk.path) > 2, "the path is kept")])
@@ -222,6 +602,10 @@ mod Putt.Suite.Game do
 
   -- ---- Water and slopes, on holes made for the purpose, no wind ----
   fn open_hole(waters : List(PuttBox), slopes : List(PuttSlope)) : PuttHole do
+    test_hole([], [], waters, slopes)
+  end
+
+  fn test_hole(blocks : List(PuttBox), sands : List(PuttBox), waters : List(PuttBox), slopes : List(PuttSlope)) : PuttHole do
     {
       title: "Test",
       par: 3,
@@ -229,8 +613,8 @@ mod Putt.Suite.Game do
       length: 6.0,
       tee: Arcade.Vec2.vec2(1.5, 0.6),
       cup: Arcade.Vec2.vec2(1.5, 5.4),
-      blocks: [],
-      sands: [],
+      blocks: blocks,
+      sands: sands,
       waters: waters,
       slopes: slopes,
       gust: 1.0
@@ -268,7 +652,47 @@ mod Putt.Suite.Game do
     let broke = rolled(side_hole, 0.0, 1.0, 2.2)
     let flat = rolled(side_hole, 0.0, 1.0, 1.0)
     let splash = Putt.Cues.audio_of(rs(), PuttMet({ at: 1.0, ev: BumpWater }))
-    all([expect_string(last_bump(wet), "water", "a putt at the pond goes in"), expect(!wet.holed, "and is not holed"), expect(Arcade.Vec2.equal(wet.rest, wet_hole.tee), "and is back where it was struck"), expect(Putt.Course.inside(pond, sank_at), "its path ends in the water"), expect(sank_at.y < 2.52, "just past the near bank"), expect(List.is_empty(short.met) && short.rest.y < 2.5, "a putt short of the pond stays dry"), expect_string(last_bump(again), "water", "a putt from the far side goes in too"), expect(Arcade.Vec2.equal(again.rest, from), "and is back where that one was struck"), near(up.rest.y, 0.6 +. 1.0 /. 1.8, 0.01, "uphill a putt rolls v^2 / 2 (drag + slope)"), near(down.rest.y, 0.6 +. 1.0 /. 0.6, 0.01, "downhill v^2 / 2 (drag - slope)"), expect(up.rest.x == 1.5 && down.rest.x == 1.5, "straight up or down the slope stays on its line"), expect(broke.rest.x > 1.6, "a putt across a slope breaks downhill"), expect(broke.rest.y > 4.0, "and rolls out past it"), expect(flat.rest.x == 1.5, "a putt that stops short of the slope does not break"), expect_int(List.length(splash), 1, "water sends one command"), expect_int(List.length(Putt.Cues.voices(Arcade.Synth.consts(), PcSplash)), 2, "the splash is two voices")])
+    let on_pond = on_tee(4)
+    let fifth = Putt.Course.pond()
+    all([expect_string(last_bump(wet), "water", "a putt at the pond goes in"), expect(!wet.holed, "and is not holed"), expect(Arcade.Vec2.equal(wet.rest, wet_hole.tee), "and is back where it was struck"), expect(Putt.Course.inside(pond, sank_at), "its path ends in the water"), expect(sank_at.y < 2.52, "just past the near bank"), expect(List.is_empty(short.met) && short.rest.y < 2.5, "a putt short of the pond stays dry"), expect_string(last_bump(again), "water", "a putt from the far side goes in too"), expect(Arcade.Vec2.equal(again.rest, from), "and is back where that one was struck"), near(up.rest.y, 0.6 +. 1.0 /. 1.8, 0.01, "uphill a putt rolls v^2 / 2 (drag + slope)"), near(down.rest.y, 0.6 +. 1.0 /. 0.6, 0.01, "downhill v^2 / 2 (drag - slope)"), expect(up.rest.x == 1.5 && down.rest.x == 1.5, "straight up or down the slope stays on its line"), expect(broke.rest.x > 1.6, "a putt across a slope breaks downhill"), expect(broke.rest.y > 4.0, "and rolls out past it"), expect(flat.rest.x == 1.5, "a putt that stops short of the slope does not break"), expect_int(List.length(splash), 1, "water sends one command"), expect_int(List.length(Putt.Cues.voices(Arcade.Synth.consts(), PcSplash)), 2, "the splash is two voices"), wet_stroke(Putt.Rules.play(rs(), PuttStrike({ aim: Arcade.Vec2.vec2(0.0, 1.0), power: 2.5 }), on_pond), fifth.tee)])
+  end
+
+  -- A game standing on hole i's tee (0-based) with no wind.
+  fn on_tee(i : Int) : PuttState do
+    let s = Putt.Rules.new_game(rs(), seed_of(2026))
+    match Putt.Course.hole_at(i) do
+    Some(h) -> { s with hole: i, ball: h.tee, wind: Arcade.Vec2.zero() }
+    None -> s
+    end
+  end
+
+  -- In the rules, a putt into the pond costs its stroke and nothing else.
+  fn wet_stroke(played : Result(PuttTurn, PuttError), tee : Arcade.Vec2.Vec2) : Outcome do
+    match played do
+    Err(_) -> Mismatch("the putt at the pond was refused")
+    Ok(t) -> do
+      all([expect_string(String.join(List.map(t.told, event_name), " "), "struck water rested", "a putt into the fifth hole's pond tells"), expect(Arcade.Vec2.equal(t.after.ball, tee), "the ball is back on the tee"), expect_int(t.after.strokes, 1, "with a stroke on the card"), expect_int(Putt.Rules.phase_rank(t.after.phase), 0, "and the hole still to play")])
+    end
+    end
+  end
+
+  -- ---- The lines the holes were laid out for, from the tee ----
+  -- What a tee shot aimed along (x, y) at this power meets, in order, and
+  -- "holed" if it drops.
+  fn line(h : PuttHole, wind : Arcade.Vec2.Vec2, x : Float, y : Float, power : Float) : String do
+    let aim = Arcade.Vec2.normalized(Arcade.Vec2.vec2(x, y))
+    let e =
+      Putt.Roll.roll(Putt.Roll.tuning(), h, wind, h.tee, Arcade.Vec2.scale(aim, power))
+    let met = List.map(e.met, fn m -> bump_name(m.ev))
+    String.join(if e.holed do List.append(met, ["holed"]) else met end, " ")
+  end
+
+  fn line_cases() : Outcome do
+    let calm = Arcade.Vec2.zero()
+    let side = Putt.Course.sidehill()
+    let at_cup = Arcade.Vec2.sub(side.cup, side.tee)
+    let gale = Arcade.Vec2.vec2(0.12, 0.0)
+    all([expect_string(line(Putt.Course.bunker(), calm, 0.0, 1.0, 3.8), "sand cup holed", "bunker: straight through the sand, hard"), expect_string(line(Putt.Course.bunker(), calm, 0.0, 1.0, 3.0), "sand", "bunker: at a pace that would reach on green, the sand keeps it"), expect_string(line(Putt.Course.bunker(), calm, -0.4, 1.0, 3.4), "wall wall cup holed", "bunker: off the left wall, round the sand"), expect_string(line(Putt.Course.bank(), calm, 0.0, 1.0, 2.6), "block", "bank: straight is the block"), expect_string(line(Putt.Course.bank(), calm, 0.76, 1.0, 2.9), "wall cup holed", "bank: off the right wall, through the gap"), expect_string(line(Putt.Course.pond(), calm, 0.0, 1.0, 2.7), "water", "pond: straight is wet"), expect_string(line(Putt.Course.pond(), calm, 0.56, 1.0, 3.5), "wall wall cup holed", "pond: down the narrow side, off two walls"), expect_string(line(side, calm, at_cup.x, at_cup.y, 2.6), "", "sidehill: aimed at the cup, the slope takes it below"), expect_string(line(side, calm, -0.09, 1.0, 2.6), "cup holed", "sidehill: aimed above it, it breaks in"), expect_string(line(Putt.Course.causeway(), calm, 0.0, 1.0, 2.7), "cup holed", "causeway: in a calm, straight down the middle"), expect_string(line(Putt.Course.causeway(), gale, 0.0, 1.0, 2.7), "water", "causeway: the same putt in the hole's strongest crosswind is wet")])
   end
 
   -- ---- A flick up and to the right, 1000 px/s up and 300 across ----
@@ -291,12 +715,19 @@ mod Putt.Suite.Game do
     end
   end
 
-  -- ---- One frame on the first tee, 360 x 640 at dpr 2 ----
+  -- ---- One frame on a tee, 360 x 640 at dpr 2 ----
   fn frame_calls() : List(Arcade.Canvas.CanvasCall) do
-    let s = Putt.Rules.new_game(rs(), seed_of(2026))
+    tee_frame(Putt.Rules.new_game(rs(), seed_of(2026)))
+  end
+
+  fn tee_frame(s : PuttState) : List(Arcade.Canvas.CanvasCall) do
     let vp = Arcade.Camera.viewport(360.0, 640.0)
     let r = rs()
     Arcade.Canvas.calls(r.num, 2.0, 360.0, 640.0, Putt.View.scene(r, s, vp))
+  end
+
+  fn calls_digest(cs : List(Arcade.Canvas.CanvasCall)) : Int do
+    Arcade.Test.Digest.list(Arcade.Test.Digest.start(), cs, call_digest)
   end
 
   fn stop_digest(h : Int, s : Arcade.Canvas.ColourStop) : Int do
@@ -366,7 +797,9 @@ mod Putt.Suite.Game do
     let l = Putt.View.projection(rs(), h, Arcade.Camera.viewport(360.0, 640.0))
     let cup = Putt.View.px(rs(), l, h.cup)
     let texts = List.filter_map(cs, is_fill_text)
-    all([expect(Putt.View.scale_of(l) == 640.0 /. 7.0, "the first hole fills the height: 7 m on 640 px"), expect(cup.x == 180.0, "the cup is on the centre line"), expect(opens_at_dpr2(cs), "the frame opens at dpr 2"), expect_string(String.join(texts, "|"), "Hole 1 of 4 - Straight - Par 2 - Stroke 1", "the caption"), expect_int(List.length(cs), 82, "calls in the frame (pinned)"), expect_int(Arcade.Test.Digest.list(Arcade.Test.Digest.start(), cs, call_digest), 2104261258, "the frame's calls (pinned)")])
+    let side = tee_frame(on_tee(6))
+    let home = tee_frame(on_tee(8))
+    all([expect_string(String.join(List.filter_map(side, is_fill_text), "|"), "Hole 7 of 9 - Sidehill - Par 3 - Stroke 1", "the seventh tee's caption"), expect_int(List.length(side), 245, "calls on the seventh tee: a slope's 42 chevrons and a pool (pinned)"), expect_int(calls_digest(side), 2235060284, "the seventh tee's calls (pinned)"), expect_int(List.length(home), 251, "calls on the ninth tee: two blocks, sand, two pools, a slope (pinned)"), expect_int(calls_digest(home), 513729974, "the ninth tee's calls (pinned)"), expect(Putt.View.scale_of(l) == 640.0 /. 7.0, "the first hole fills the height: 7 m on 640 px"), expect(cup.x == 180.0, "the cup is on the centre line"), expect(opens_at_dpr2(cs), "the frame opens at dpr 2"), expect_string(String.join(texts, "|"), "Hole 1 of 9 - Straight - Par 2 - Stroke 1", "the caption"), expect_int(List.length(cs), 82, "calls in the frame (pinned)"), expect_int(calls_digest(cs), 2377422562, "the frame's calls (pinned)")])
   end
 
   -- ---- Sound: the cue table and the feed ----
@@ -414,11 +847,14 @@ mod Putt.Suite.Game do
 
   fn cases() : List(Case) do
     [
-      case("replay: seed and actions give one game, on every target", fn () -> replay_cases()),
+      case("replay: the bot holes out all nine, one game on every target", fn () -> replay_cases()),
       case("refusals stop a replay and say why", fn () -> refusal_cases()),
-      case("one row per hole under the bot", fn () -> hole_rows()),
+      case("the bot holes out all nine with another seed's winds", fn () -> other_seed_cases()),
+      case("a plain player's card, and each tee's wind", fn () -> plain_cases()),
+      case("the course: nine sound holes", fn () -> course_cases()),
       case("each hole's wind is drawn from the seed", fn () -> wind_cases()),
       case("the green: lines, walls, blocks, sand, cup and lip", fn () -> physics_cases()),
+      case("the lines the holes were laid out for", fn () -> line_cases()),
       case("water returns the ball, slopes pull it", fn () -> hazard_cases()),
       case("a flick becomes a putt", fn () -> gesture_cases()),
       case("a frame's canvas calls", fn () -> canvas_cases()),
