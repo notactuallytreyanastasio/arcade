@@ -1,0 +1,9 @@
+mod Tumble.Main.Game do
+
+  needs IO.Console
+
+  fn main(_c : Cap(IO.Console)) : () do
+    Arcade.Test.Harness.report("tumble", Tumble.Suite.Game.cases())
+  end
+
+end

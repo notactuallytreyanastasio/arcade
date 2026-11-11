@@ -1,0 +1,386 @@
+mod Tumble.Roll do
+
+  -- The ball on the board, one fixed step at a time. A step: the floor's
+  -- tilt eases toward where the player holds it; the tilt, the wind, the
+  -- quake's jolt and the gate's magnet pull the ball; drag slows it (hardly
+  -- at all on ice); then posts knock it back, rails (when the round has
+  -- them) keep it on the floor, gems under it are taken, the gate ends the
+  -- round, and a ball whose centre is over no tile starts to fall. A falling
+  -- ball keeps its sideways speed and drops under gravity until it is out of
+  -- sight. Only + - * / and sqrt: a run is bit-identical natively and on JS.
+  cap pure
+
+  import Arcade.Vec2
+  import Arcade.Physics.Sim
+
+  -- Seconds, metres, m/s and m/s^2.
+  --   push         the pull of a full tilt
+  --   ice_grip     the share of that pull ice passes on
+  --   drag, ice_drag   the share of speed lost per second
+  --   tilt_rate    how fast the floor follows the hand, per second
+  --   quake_every  steps between a quake's jolts
+  --   fall_depth   how far below the floor a ball is gone
+  type TumbleTuning = {
+    dt : Float,
+    ball_radius : Float,
+    push : Float,
+    ice_grip : Float,
+    drag : Float,
+    ice_drag : Float,
+    tilt_rate : Float,
+    top_speed : Float,
+    post_radius : Float,
+    post_bounce : Float,
+    post_kick : Float,
+    rail_bounce : Float,
+    gate_radius : Float,
+    gem_radius : Float,
+    quake_every : Int,
+    gravity : Float,
+    fall_depth : Float
+  }
+
+  type TumbleBall = {
+    at : Vec2,
+    vel : Vec2,
+    z : Float,
+    vz : Float,
+    tilt : Vec2
+  }
+
+  type TumbleFate = FateRolling | FateFalling | FateFell | FateCleared
+
+  -- What a step can meet: a post, a rail, a gem taken, the floor's edge
+  -- crossed, the gate.
+  type TumbleBump = BumpPost | BumpRail | BumpGem | BumpEdge | BumpGate
+
+  -- A run in flight. `gems` are the ones still on the board, `got` how many
+  -- were taken; `noise` is the quake's generator and `jolt` its pull now;
+  -- `met` is what the steps since it was last emptied met, newest first.
+  type TumbleRun = {
+    clock : SimClock,
+    ball : TumbleBall,
+    fate : TumbleFate,
+    gems : List(Vec2),
+    got : Int,
+    noise : Rng,
+    jolt : Vec2,
+    met : List(Timed(TumbleBump))
+  }
+
+  -- What every step reads.
+  type TumbleCourt = {
+    num : Numerics,
+    tune : TumbleTuning,
+    mods : TumbleMods,
+    board : TumbleBoard,
+    wind : Vec2
+  }
+
+  doc """
+  The game's numbers. dt is 1/128 s, a power of two, so the clock is exact.
+  At top speed the ball moves 0.078 m a step, under the smallest ball's
+  radius, so it cannot pass through a post or a rail between two steps.
+  """
+  fn tuning() : TumbleTuning needs () do
+    {
+      dt: 0.0078125,
+      ball_radius: 0.3,
+      push: 7.0,
+      ice_grip: 0.5,
+      drag: 0.9,
+      ice_drag: 0.08,
+      tilt_rate: 10.0,
+      top_speed: 10.0,
+      post_radius: 0.2,
+      post_bounce: 0.8,
+      post_kick: 1.6,
+      rail_bounce: 0.45,
+      gate_radius: 0.5,
+      gem_radius: 0.5,
+      quake_every: 48,
+      gravity: 20.0,
+      fall_depth: 6.0
+    }
+  end
+
+  doc """The ball's radius under the round's powers."""
+  fn radius(c : TumbleCourt) : Float needs () do
+    c.tune.ball_radius *. c.mods.size
+  end
+
+  doc """A run about to start: the ball at rest on the board's start, every gem down."""
+  fn begin(board : TumbleBoard, noise : Rng) : TumbleRun needs () do
+    {
+      clock: Arcade.Physics.Sim.clock(),
+      ball: { at: Tumble.Board.start(board), vel: zero(), z: 0.0, vz: 0.0, tilt: zero() },
+      fate: FateRolling,
+      gems: board.gems,
+      got: 0,
+      noise: noise,
+      jolt: zero(),
+      met: []
+    }
+  end
+
+  doc """A vector held to the unit disc."""
+  fn in_disc(v : Vec2) : Vec2 needs () do
+    let l = length(v)
+    if l > 1.0 do scale(v, 1.0 /. l) else v end
+  end
+
+  doc """Whether the run is still being played."""
+  fn live(r : TumbleRun) : Bool needs () do
+    match r.fate do
+    FateRolling -> true
+    FateFalling -> true
+    FateFell -> false
+    FateCleared -> false
+    end
+  end
+
+  doc """One step of dt with the floor held toward `steer` (the unit disc). A finished run does not move."""
+  fn step(c : TumbleCourt, steer : Vec2, r : TumbleRun) : TumbleRun needs () do
+    match r.fate do
+    FateRolling -> rolled(c, steer, r)
+    FateFalling -> fallen(c, r)
+    FateFell -> r
+    FateCleared -> r
+    end
+  end
+
+  -- A quake's jolt: two draws, each a pull in [-1, 1), redrawn every
+  -- quake_every steps while the round has a quake.
+  pfn jolted(c : TumbleCourt, r : TumbleRun, t : SimClock) : (Vec2, Rng) needs () do
+    if c.mods.quake > 0.0 && records(t.step, c.tune.quake_every) do
+      do
+        let (ux, r1) = Arcade.Rng.next_unit(c.num, r.noise)
+        let (uy, r2) = Arcade.Rng.next_unit(c.num, r1)
+        (vec2(ux *. 2.0 -. 1.0, uy *. 2.0 -. 1.0), r2)
+      end
+    else
+      (r.jolt, r.noise)
+    end
+  end
+
+  doc """The gate's pull on a ball at `at`: the magnet's, inside its reach."""
+  fn magnet(c : TumbleCourt, at : Vec2) : Vec2 needs () do
+    let d = sub(Tumble.Board.gate(c.board), at)
+    let far = length(d)
+    if c.mods.magnet > 0.0 && far > 0.0 && far < c.mods.reach do
+      scale(d, c.mods.magnet /. far)
+    else
+      zero()
+    end
+  end
+
+  pfn capped(v : Vec2, top : Float) : Vec2 needs () do
+    let l = length(v)
+    if l > top do scale(v, top /. l) else v end
+  end
+
+  pfn rolled(c : TumbleCourt, steer : Vec2, r : TumbleRun) : TumbleRun needs () do
+    let tune = c.tune
+    let b = r.ball
+    let t = tick(r.clock, tune.dt)
+    let want = in_disc(vec2(steer.x *. c.mods.flip, steer.y))
+    let tilt =
+      add(b.tilt, scale(sub(want, b.tilt), Arcade.Num.min_float(1.0, tune.dt *. tune.tilt_rate)))
+    let (jolt, noise) = jolted(c, r, t)
+    let icy = c.mods.slick || Tumble.Board.is_ice(Tumble.Board.tile_under(c.board, b.at))
+    let grip = if icy do tune.ice_grip else 1.0 end
+    let drag = (if icy do tune.ice_drag else tune.drag end) *. c.mods.drag
+    let pull =
+      add(add(scale(tilt, tune.push *. c.mods.push *. grip), scale(c.wind, c.mods.gust)), add(scale(jolt, c.mods.quake), magnet(c, b.at)))
+    let v0 = scale(add(b.vel, scale(pull, tune.dt)), 1.0 -. drag *. tune.dt)
+    let v1 = capped(v0, tune.top_speed)
+    let p1 = add(b.at, scale(v1, tune.dt))
+    let (p2, v2, posted) = posts(c, c.board.posts, p1, v1, false)
+    let (p3, v3, railed) = rails(c, p2, v2)
+    let (left, took) = gems(tune, r.gems, p3, [], 0)
+    let m1 = if posted do emit(r.met, t.t, BumpPost) else r.met end
+    let m2 = if railed do emit(m1, t.t, BumpRail) else m1 end
+    let m3 = if took > 0 do emit(m2, t.t, BumpGem) else m2 end
+    let ball = { at: p3, vel: v3, z: 0.0, vz: 0.0, tilt: tilt }
+    let next = { clock: t, ball: ball, fate: FateRolling, gems: left, got: r.got + took, noise: noise, jolt: jolt, met: m3 }
+    if length(sub(p3, Tumble.Board.gate(c.board))) < tune.gate_radius do
+      { next with fate: FateCleared, met: emit(m3, t.t, BumpGate) }
+    else
+      if Tumble.Board.is_void(Tumble.Board.tile_under(c.board, p3)) do
+        { next with fate: FateFalling, met: emit(m3, t.t, BumpEdge) }
+      else
+        next
+      end
+    end
+  end
+
+  pfn fallen(c : TumbleCourt, r : TumbleRun) : TumbleRun needs () do
+    let tune = c.tune
+    let b = r.ball
+    let t = tick(r.clock, tune.dt)
+    let (z, vz) = Arcade.Physics.Kinematics.ballistic_height(b.z, b.vz, tune.gravity, tune.dt)
+    let ball = { b with at: add(b.at, scale(b.vel, tune.dt)), z: z, vz: vz }
+    if z < 0.0 -. tune.fall_depth do
+      { r with clock: t, ball: ball, fate: FateFell }
+    else
+      { r with clock: t, ball: ball }
+    end
+  end
+
+  -- ---- Posts ----
+  doc """
+  A ball of radius r touching a post of radius pr at `post`: put back out
+  along the line of centres, and when it was closing, reflected keeping
+  `bounce` and kicked away at `kick` m/s. None when they do not touch.
+  """
+  fn off_post(p : Vec2, v : Vec2, r : Float, post : Vec2, pr : Float, bounce : Float, kick : Float) : Option((Vec2, Vec2)) needs () do
+    let d = sub(p, post)
+    let d2 = dot(d, d)
+    let reach = r +. pr
+    if d2 >= reach *. reach || d2 <= 0.0 do
+      None
+    else
+      do
+        let n = scale(d, 1.0 /. Math.sqrt(d2))
+        let out = add(post, scale(n, reach))
+        if dot(v, n) < 0.0 do
+          Some((out, add(Arcade.Physics.Kinematics.reflect(v, n, bounce), scale(n, kick))))
+        else
+          Some((out, v))
+        end
+      end
+    end
+  end
+
+  pfn posts(c : TumbleCourt, ps : List(Vec2), p : Vec2, v : Vec2, hit : Bool) : (Vec2, Vec2, Bool) needs () do
+    match ps do
+    Nil -> (p, v, hit)
+    Cons(post, rest) -> do
+      match off_post(p, v, radius(c), post, c.tune.post_radius, c.tune.post_bounce, c.tune.post_kick *. c.mods.kick) do
+      Some((p1, v1)) -> posts(c, rest, p1, v1, true)
+      None -> posts(c, rest, p, v, hit)
+      end
+    end
+    end
+  end
+
+  -- ---- Rails ----
+  doc """
+  A ball of radius r overlapping the box lo-hi: put back out along the line
+  from the box's nearest point and reflected off that normal keeping
+  `bounce`. A centre already inside leaves by the nearest face. None when
+  they do not touch.
+  """
+  fn off_box(p : Vec2, v : Vec2, r : Float, lo : Vec2, hi : Vec2, bounce : Float) : Option((Vec2, Vec2)) needs () do
+    let q = vec2(Arcade.Num.clamp(p.x, lo.x, hi.x), Arcade.Num.clamp(p.y, lo.y, hi.y))
+    let d = sub(p, q)
+    let d2 = dot(d, d)
+    if d2 >= r *. r do
+      None
+    else
+      if d2 > 0.0 do
+        do
+          let n = scale(d, 1.0 /. Math.sqrt(d2))
+          Some((add(q, scale(n, r)), Arcade.Physics.Kinematics.reflect_approaching(v, n, bounce)))
+        end
+      else
+        Some(by_face(p, v, r, lo, hi, bounce))
+      end
+    end
+  end
+
+  pfn by_face(p : Vec2, v : Vec2, r : Float, lo : Vec2, hi : Vec2, bounce : Float) : (Vec2, Vec2) needs () do
+    let left = p.x -. lo.x
+    let right = hi.x -. p.x
+    let below = p.y -. lo.y
+    let above = hi.y -. p.y
+    let side = Arcade.Num.min_float(left, right)
+    let ends = Arcade.Num.min_float(below, above)
+    let (n, out) =
+      if side <= ends do
+        if left <= right do
+          (vec2(-1.0, 0.0), vec2(lo.x -. r, p.y))
+        else
+          (vec2(1.0, 0.0), vec2(hi.x +. r, p.y))
+        end
+      else
+        if below <= above do
+          (vec2(0.0, -1.0), vec2(p.x, lo.y -. r))
+        else
+          (vec2(0.0, 1.0), vec2(p.x, hi.y +. r))
+        end
+      end
+    (out, Arcade.Physics.Kinematics.reflect_approaching(v, n, bounce))
+  end
+
+  -- The nine cells round the ball, each void one a box the ball bounces off.
+  pfn rails(c : TumbleCourt, p : Vec2, v : Vec2) : (Vec2, Vec2, Bool) needs () do
+    if c.mods.rails do
+      do
+        let at = Tumble.Board.cell_under(p)
+        rail_cells(c, at, 0, p, v, false)
+      end
+    else
+      (p, v, false)
+    end
+  end
+
+  pfn rail_cells(c : TumbleCourt, at : TumbleCell, i : Int, p : Vec2, v : Vec2, hit : Bool) : (Vec2, Vec2, Bool) needs () do
+    if i >= 9 do
+      (p, v, hit)
+    else
+      do
+        let col = at.col + i % 3 - 1
+        let row = at.row + i / 3 - 1
+        if Tumble.Board.is_void(Tumble.Board.tile_at(c.board, col, row)) do
+          do
+            let lo = vec2(int_to_float(col), int_to_float(row))
+            let hi = vec2(int_to_float(col) +. 1.0, int_to_float(row) +. 1.0)
+            match off_box(p, v, radius(c), lo, hi, c.tune.rail_bounce) do
+            Some((p1, v1)) -> rail_cells(c, at, i + 1, p1, v1, true)
+            None -> rail_cells(c, at, i + 1, p, v, hit)
+            end
+          end
+        else
+          rail_cells(c, at, i + 1, p, v, hit)
+        end
+      end
+    end
+  end
+
+  -- ---- Gems ----
+  -- The gems left once those within gem_radius of p are taken, and how many
+  -- were. Order is kept.
+  pfn gems(tune : TumbleTuning, gs : List(Vec2), p : Vec2, kept : List(Vec2), took : Int) : (List(Vec2), Int) needs () do
+    match gs do
+    Nil -> (List.reverse(kept), took)
+    Cons(g, rest) -> do
+      if length(sub(g, p)) < tune.gem_radius do
+        gems(tune, rest, p, kept, took + 1)
+      else
+        gems(tune, rest, p, Cons(g, kept), took)
+      end
+    end
+    end
+  end
+
+  fn fate_rank(f : TumbleFate) : Int needs () do
+    match f do
+    FateRolling -> 0
+    FateFalling -> 1
+    FateFell -> 2
+    FateCleared -> 3
+    end
+  end
+
+  fn bump_rank(b : TumbleBump) : Int needs () do
+    match b do
+    BumpPost -> 0
+    BumpRail -> 1
+    BumpGem -> 2
+    BumpEdge -> 3
+    BumpGate -> 4
+    end
+  end
+
+end

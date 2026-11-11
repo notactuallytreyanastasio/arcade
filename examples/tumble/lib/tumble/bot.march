@@ -1,0 +1,111 @@
+mod Tumble.Bot do
+
+  -- A player that follows the board's spine. It is the generator's proof
+  -- that a board can be cleared (Tumble.Course) and the suite's player. It
+  -- reads only what a person sees: the board, the ball, the round's powers.
+  -- No sin or cos, so it plays the same run on every target.
+  cap pure
+
+  import Arcade.Vec2
+
+  -- How the bot drives.
+  --   cruise, ice_cruise  the speed it wants on floor and on ice, m/s
+  --   corner, ice_corner  the same, heading for a cell where the path turns
+  --   closing    wanted speed per metre left to the cell it is heading for
+  --   firmness   tilt per m/s of error between the speed it has and wants
+  type TumbleBotTuning = {
+    cruise : Float,
+    ice_cruise : Float,
+    corner : Float,
+    ice_corner : Float,
+    closing : Float,
+    firmness : Float
+  }
+
+  fn tuning() : TumbleBotTuning needs () do
+    { cruise: 2.6, ice_cruise: 1.4, corner: 1.8, ice_corner: 0.9, closing: 3.0, firmness: 0.9 }
+  end
+
+  -- The last index of the spine whose cell the ball is in, counting from i.
+  pfn standing_on(spine : List(TumbleCell), at : TumbleCell, i : Int, best : Option(Int)) : Option(Int) needs () do
+    match spine do
+    Nil -> best
+    Cons(c, rest) -> do
+      if Tumble.Board.same_cell(c, at) do
+        standing_on(rest, at, i + 1, Some(i))
+      else
+        standing_on(rest, at, i + 1, best)
+      end
+    end
+    end
+  end
+
+  -- The spine cell whose centre is nearest p.
+  pfn nearest(spine : List(TumbleCell), p : Vec2, best : Vec2, best_d : Float) : Vec2 needs () do
+    match spine do
+    Nil -> best
+    Cons(c, rest) -> do
+      let m = Tumble.Board.centre(c)
+      let d = length(sub(m, p))
+      if d < best_d do nearest(rest, p, m, d) else nearest(rest, p, best, best_d) end
+    end
+    end
+  end
+
+  -- Where the bot is going next: the point it heads for, whether the path
+  -- turns there, and whether the tile there is ice.
+  type TumbleBotPlan = { to : Vec2, corner : Bool, ice_ahead : Bool }
+
+  pfn turns(a : TumbleCell, b : TumbleCell, c : TumbleCell) : Bool needs () do
+    b.col - a.col != c.col - b.col || b.row - a.row != c.row - b.row
+  end
+
+  doc """
+  Where the bot heads from p: on a spine cell, the middle of the next one
+  (the two are neighbours, so the straight line between stays on floor); off
+  the spine, the middle of the nearest spine cell, taken as a corner.
+  """
+  fn plan(board : TumbleBoard, p : Vec2) : TumbleBotPlan needs () do
+    match standing_on(board.spine, Tumble.Board.cell_under(p), 0, None) do
+    Some(i) -> do
+      match List.drop(board.spine, i) do
+      Cons(a, Cons(b, Cons(c, _))) -> do
+        { to: Tumble.Board.centre(b), corner: turns(a, b, c), ice_ahead: Tumble.Board.is_ice(Tumble.Board.tile_at(board, b.col, b.row)) }
+      end
+      Cons(_, Cons(b, Nil)) -> { to: Tumble.Board.centre(b), corner: false, ice_ahead: false }
+      Cons(_, Nil) -> { to: Tumble.Board.gate(board), corner: false, ice_ahead: false }
+      Nil -> { to: Tumble.Board.gate(board), corner: false, ice_ahead: false }
+      end
+    end
+    None -> { to: nearest(board.spine, p, Tumble.Board.gate(board), 1000000.0), corner: true, ice_ahead: false }
+    end
+  end
+
+  doc """
+  The tilt the bot holds: toward the speed it wants, which is toward where
+  it is heading, at its cruise (the ice cruise on ice or with ice ahead, the
+  corner speed when the path turns there), less what the wind, the quake's
+  jolt and the gate's magnet are already pushing (the share of a full tilt
+  each is worth on the ground the ball is on). Left and right are swapped
+  when the round's Mirror swaps them.
+  """
+  fn steer(bt : TumbleBotTuning, c : TumbleCourt, r : TumbleRun) : Vec2 needs () do
+    let ball = r.ball
+    let going = plan(c.board, ball.at)
+    let to = sub(going.to, ball.at)
+    let icy = c.mods.slick || Tumble.Board.is_ice(Tumble.Board.tile_under(c.board, ball.at))
+    let straight = if icy || going.ice_ahead do bt.ice_cruise else bt.cruise end
+    let cruise =
+      if going.corner do Arcade.Num.min_float(straight, if icy do bt.ice_corner else bt.corner end) else straight end
+    let wanted = scale(to, bt.closing)
+    let fast = length(wanted)
+    let want = if fast > cruise do scale(wanted, cruise /. fast) else wanted end
+    let lean = scale(sub(want, ball.vel), bt.firmness)
+    let full = c.tune.push *. c.mods.push *. (if icy do c.tune.ice_grip else 1.0 end)
+    let pushed =
+      add(add(scale(c.wind, c.mods.gust), scale(r.jolt, c.mods.quake)), Tumble.Roll.magnet(c, ball.at))
+    let held = Tumble.Roll.in_disc(sub(lean, scale(pushed, 1.0 /. full)))
+    vec2(held.x *. c.mods.flip, held.y)
+  end
+
+end

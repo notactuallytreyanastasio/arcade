@@ -1,0 +1,159 @@
+mod Tumble.Board do
+
+  -- A board: a grid of one-metre tiles floating in nothing. Tile (col, row)
+  -- covers x in [col, col + 1) and y in [row, row + 1); +y runs from the
+  -- start toward the gate. A ball whose centre is over no tile falls. Posts
+  -- stand on the floor and knock the ball about; gems are picked up by
+  -- rolling over them. `spine` is the run of cells the board was carved
+  -- along, start first and gate last: every cell of it is floor.
+  cap pure
+
+  import Arcade.Vec2
+
+  type TumbleTile = TileVoid | TileFloor | TileIce | TileGate
+
+  type TumbleCell = { col : Int, row : Int }
+
+  type TumbleBoard = {
+    cols : Int,
+    rows : Int,
+    tiles : List(List(TumbleTile)),
+    posts : List(Vec2),
+    gems : List(Vec2),
+    spine : List(TumbleCell)
+  }
+
+  fn cell(col : Int, row : Int) : TumbleCell needs () do
+    { col: col, row: row }
+  end
+
+  fn same_cell(a : TumbleCell, b : TumbleCell) : Bool needs () do
+    a.col == b.col && a.row == b.row
+  end
+
+  doc """The middle of a cell, in metres."""
+  fn centre(c : TumbleCell) : Vec2 needs () do
+    vec2(int_to_float(c.col) +. 0.5, int_to_float(c.row) +. 0.5)
+  end
+
+  doc """The cell a point is over. Points left of or below the board get negative cells."""
+  fn cell_under(p : Vec2) : TumbleCell needs () do
+    { col: float_floor(p.x), row: float_floor(p.y) }
+  end
+
+  doc """The tile at (col, row): TileVoid anywhere off the grid."""
+  fn tile_at(b : TumbleBoard, col : Int, row : Int) : TumbleTile needs () do
+    if col < 0 || row < 0 || col >= b.cols || row >= b.rows do
+      TileVoid
+    else
+      match List.nth_opt(b.tiles, row) do
+      None -> TileVoid
+      Some(line) -> do
+        match List.nth_opt(line, col) do
+        None -> TileVoid
+        Some(t) -> t
+        end
+      end
+      end
+    end
+  end
+
+  fn tile_under(b : TumbleBoard, p : Vec2) : TumbleTile needs () do
+    let c = cell_under(p)
+    tile_at(b, c.col, c.row)
+  end
+
+  fn is_void(t : TumbleTile) : Bool needs () do
+    match t do
+    TileVoid -> true
+    TileFloor -> false
+    TileIce -> false
+    TileGate -> false
+    end
+  end
+
+  fn is_ice(t : TumbleTile) : Bool needs () do
+    match t do
+    TileIce -> true
+    TileVoid -> false
+    TileFloor -> false
+    TileGate -> false
+    end
+  end
+
+  fn tile_rank(t : TumbleTile) : Int needs () do
+    match t do
+    TileVoid -> 0
+    TileFloor -> 1
+    TileIce -> 2
+    TileGate -> 3
+    end
+  end
+
+  doc """Where the ball starts: the middle of the spine's first cell. A board always has a spine."""
+  fn start(b : TumbleBoard) : Vec2 needs () do
+    match b.spine do
+    Cons(c, _) -> centre(c)
+    Nil -> unreachable()
+    end
+  end
+
+  pfn last_cell(cs : List(TumbleCell), seen : TumbleCell) : TumbleCell needs () do
+    match cs do
+    Nil -> seen
+    Cons(c, rest) -> last_cell(rest, c)
+    end
+  end
+
+  doc """The gate's cell: the spine's last."""
+  fn gate_cell(b : TumbleBoard) : TumbleCell needs () do
+    match b.spine do
+    Cons(c, rest) -> last_cell(rest, c)
+    Nil -> unreachable()
+    end
+  end
+
+  doc """The middle of the gate."""
+  fn gate(b : TumbleBoard) : Vec2 needs () do
+    centre(gate_cell(b))
+  end
+
+  doc """How many tiles are not void."""
+  fn floor_count(b : TumbleBoard) : Int needs () do
+    List.fold_left(b.tiles, 0, fn (acc, line) ->
+      List.fold_left(line, acc, fn (n, t) -> if is_void(t) do n else n + 1 end)
+    )
+  end
+
+  -- ---- Building: a board starts all void and tiles are laid on it ----
+  doc """An all-void grid."""
+  fn blank(cols : Int, rows : Int) : List(List(TumbleTile)) needs () do
+    List.repeat(List.repeat(TileVoid, cols), rows)
+  end
+
+  pfn set_in_line(line : List(TumbleTile), col : Int, t : TumbleTile) : List(TumbleTile) needs () do
+    match line do
+    Nil -> []
+    Cons(x, rest) -> if col == 0 do Cons(t, rest) else Cons(x, set_in_line(rest, col - 1, t)) end
+    end
+  end
+
+  doc """The grid with (col, row) set to t. Off the grid changes nothing."""
+  fn laid(tiles : List(List(TumbleTile)), col : Int, row : Int, t : TumbleTile) : List(List(TumbleTile)) needs () do
+    if col < 0 || row < 0 do
+      tiles
+    else
+      match tiles do
+      Nil -> []
+      Cons(line, rest) -> do
+        if row == 0 do
+          Cons(set_in_line(line, col, t), rest)
+        else
+          Cons(line, laid(rest, col, row - 1, t))
+        end
+      end
+      end
+    end
+  end
+
+end

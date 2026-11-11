@@ -1,0 +1,238 @@
+mod Tumble.Power do
+
+  -- The slot machine and what it deals. A spin stops three reels, each on a
+  -- power, and the round is played under all three. A power changes the
+  -- numbers the roll is stepped with (TumbleMods); powers stack, so two
+  -- Turbos push harder than one and two Mirrors cancel. A second Magnet
+  -- reaches further and pulls no harder: its pull stays under a full tilt's,
+  -- so the gate never drags a ball across a gap the player cannot fight. Three alike is a
+  -- jackpot: the round's score is tripled. Every reel carries the same strip.
+  cap pure
+
+  type TumblePower =
+    PowTurbo
+    | PowSyrup
+    | PowIce
+    | PowBumper
+    | PowMagnet
+    | PowRails
+    | PowMirror
+    | PowQuake
+    | PowGust
+    | PowClock
+    | PowTiny
+    | PowGiant
+
+  -- What the powers of a round add up to. Multipliers are 1.0 and switches
+  -- off on a round with no powers.
+  --   push       times the tilt's pull
+  --   drag       times the floor's drag
+  --   slick      every floor tile plays as ice
+  --   size       times the ball's radius
+  --   kick       times the speed a post adds
+  --   magnet     pull toward the gate, m/s^2, inside `reach` metres of it
+  --   rails      the floor's edges are walls
+  --   flip       1.0, or -1.0 when left and right are swapped
+  --   quake      random jolts, m/s^2
+  --   gust       a steady wind, m/s^2 (its direction is drawn at the spin)
+  --   more_time  seconds added to the round's limit
+  --   payout     times the round's score
+  type TumbleMods = {
+    push : Float,
+    drag : Float,
+    slick : Bool,
+    size : Float,
+    kick : Float,
+    magnet : Float,
+    reach : Float,
+    rails : Bool,
+    flip : Float,
+    quake : Float,
+    gust : Float,
+    more_time : Float,
+    payout : Int
+  }
+
+  -- Three reels stopped.
+  type TumbleSpin = { first : TumblePower, second : TumblePower, third : TumblePower }
+
+  fn plain() : TumbleMods needs () do
+    {
+      push: 1.0,
+      drag: 1.0,
+      slick: false,
+      size: 1.0,
+      kick: 1.0,
+      magnet: 0.0,
+      reach: 0.0,
+      rails: false,
+      flip: 1.0,
+      quake: 0.0,
+      gust: 0.0,
+      more_time: 0.0,
+      payout: 1
+    }
+  end
+
+  doc """The mods with one more power on top."""
+  fn with_power(m : TumbleMods, p : TumblePower) : TumbleMods needs () do
+    match p do
+    PowTurbo -> { m with push: m.push *. 1.4 }
+    PowSyrup -> { m with push: m.push *. 0.8, drag: m.drag *. 2.5 }
+    PowIce -> { m with slick: true, drag: m.drag *. 0.6 }
+    PowBumper -> { m with kick: m.kick *. 2.0 }
+    PowMagnet -> { m with magnet: 3.0, reach: m.reach +. 2.5 }
+    PowRails -> { m with rails: true }
+    PowMirror -> { m with flip: 0.0 -. m.flip }
+    PowQuake -> { m with quake: m.quake +. 1.2 }
+    PowGust -> { m with gust: m.gust +. 0.9 }
+    PowClock -> { m with more_time: m.more_time +. 10.0 }
+    PowTiny -> { m with size: m.size *. 0.6 }
+    PowGiant -> { m with size: m.size *. 1.35 }
+    end
+  end
+
+  fn power_rank(p : TumblePower) : Int needs () do
+    match p do
+    PowTurbo -> 0
+    PowSyrup -> 1
+    PowIce -> 2
+    PowBumper -> 3
+    PowMagnet -> 4
+    PowRails -> 5
+    PowMirror -> 6
+    PowQuake -> 7
+    PowGust -> 8
+    PowClock -> 9
+    PowTiny -> 10
+    PowGiant -> 11
+    end
+  end
+
+  fn same(a : TumblePower, b : TumblePower) : Bool needs () do
+    power_rank(a) == power_rank(b)
+  end
+
+  doc """Every power, in rank order."""
+  fn every() : List(TumblePower) needs () do
+    [
+      PowTurbo,
+      PowSyrup,
+      PowIce,
+      PowBumper,
+      PowMagnet,
+      PowRails,
+      PowMirror,
+      PowQuake,
+      PowGust,
+      PowClock,
+      PowTiny,
+      PowGiant
+    ]
+  end
+
+  doc """The word on a reel's face."""
+  fn name(p : TumblePower) : String needs () do
+    match p do
+    PowTurbo -> "TURBO"
+    PowSyrup -> "SYRUP"
+    PowIce -> "ICE"
+    PowBumper -> "BUMPER"
+    PowMagnet -> "MAGNET"
+    PowRails -> "RAILS"
+    PowMirror -> "MIRROR"
+    PowQuake -> "QUAKE"
+    PowGust -> "GUST"
+    PowClock -> "CLOCK"
+    PowTiny -> "TINY"
+    PowGiant -> "GIANT"
+    end
+  end
+
+  doc """What a power does, in a few words, for the round's banner."""
+  fn blurb(p : TumblePower) : String needs () do
+    match p do
+    PowTurbo -> "the tilt pulls harder"
+    PowSyrup -> "slow and sticky"
+    PowIce -> "the whole floor is ice"
+    PowBumper -> "posts hit back twice as hard"
+    PowMagnet -> "the gate pulls you in"
+    PowRails -> "the edges are walls"
+    PowMirror -> "left is right"
+    PowQuake -> "the floor jolts"
+    PowGust -> "a steady wind"
+    PowClock -> "ten more seconds"
+    PowTiny -> "a small ball"
+    PowGiant -> "a big ball"
+    end
+  end
+
+  doc """
+  One reel's strip: each power with how many stops it has. Rails and Magnet,
+  which make a round easy, are the rare ones.
+  """
+  fn strip() : List((Int, TumblePower)) needs () do
+    [
+      (4, PowTurbo),
+      (3, PowSyrup),
+      (4, PowIce),
+      (4, PowBumper),
+      (2, PowMagnet),
+      (2, PowRails),
+      (4, PowMirror),
+      (4, PowQuake),
+      (4, PowGust),
+      (3, PowClock),
+      (3, PowTiny),
+      (3, PowGiant)
+    ]
+  end
+
+  doc """How many stops a strip has."""
+  fn stops(s : List((Int, TumblePower))) : Int needs () do
+    List.fold_left(s, 0, fn (acc, w) ->
+      let (n, _) = w
+      acc + n
+    )
+  end
+
+  -- The power at stop i of a strip. The strip is not empty and i is under
+  -- its stop count, so the end of the strip is never reached.
+  pfn at_stop(s : List((Int, TumblePower)), i : Int) : TumblePower needs () do
+    match s do
+    Nil -> unreachable()
+    Cons((n, p), rest) -> if i < n do p else at_stop(rest, i - n) end
+    end
+  end
+
+  doc """One reel stopped: one draw."""
+  fn reel(r : Rng) : (TumblePower, Rng) needs () do
+    let s = strip()
+    let (i, after) = Arcade.Rng.next_int_below(r, 40)
+    (at_stop(s, i % stops(s)), after)
+  end
+
+  doc """Three reels stopped, left to right: three draws."""
+  fn spin(r : Rng) : (TumbleSpin, Rng) needs () do
+    let (a, r1) = reel(r)
+    let (b, r2) = reel(r1)
+    let (c, r3) = reel(r2)
+    ({ first: a, second: b, third: c }, r3)
+  end
+
+  fn powers(s : TumbleSpin) : List(TumblePower) needs () do
+    [s.first, s.second, s.third]
+  end
+
+  doc """Three alike."""
+  fn jackpot(s : TumbleSpin) : Bool needs () do
+    same(s.first, s.second) && same(s.second, s.third)
+  end
+
+  doc """What a spin adds up to: its three powers stacked, the payout tripled on a jackpot."""
+  fn mods_of(s : TumbleSpin) : TumbleMods needs () do
+    let m = with_power(with_power(with_power(plain(), s.first), s.second), s.third)
+    if jackpot(s) do { m with payout: 3 } else m end
+  end
+
+end
