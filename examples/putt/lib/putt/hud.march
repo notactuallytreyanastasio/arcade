@@ -1,0 +1,677 @@
+mod Putt.Hud do
+
+  -- What the player reads: the frame the shell paints. Everything written is
+  -- in a band along the top, away from the hand that pulls: the hole and its
+  -- par, the wind, the stroke and the running score, and under them what to
+  -- do, the power of a held pull, and the new-game button. The hole is fitted
+  -- between that band and a strip along the bottom this module leaves to the
+  -- page (web/index.html's own links). The aim preview is drawn on the green
+  -- while a pull is held; a finished hole or course puts the scorecard over
+  -- it. Every string is a fn of the state, so the suite reads them without a
+  -- canvas. Text is always centred on a point (Arcade.Draw.Lettering has no
+  -- other alignment and nothing here can measure a string), so every line is
+  -- short enough for its column.
+  cap pure
+
+  import Arcade.Draw
+  import Arcade.Vec2
+
+  -- What the shell is showing: a ball at rest and no pointer down, a pull
+  -- held (press to pointer, CSS pixels), or a struck putt rolling.
+  type HudMoment = HudWaiting | HudPulling(Vec2) | HudRolling
+
+  -- A rectangle on screen, CSS pixels, y down.
+  type HudBox = { left : Float, top : Float, right : Float, bottom : Float }
+
+  -- ===================================================================
+  -- Words
+  -- ===================================================================
+  doc """A score against par as golf writes it: E, +2, -1."""
+  fn versus_par(d : Int) : String needs () do
+    if d == 0 do
+      "E"
+    else
+      if d > 0 do "+" ++ int_to_string(d) else int_to_string(d) end
+    end
+  end
+
+  doc """A score against par in words: level par, 2 over par, 1 under par."""
+  fn par_words(d : Int) : String needs () do
+    if d == 0 do
+      "level par"
+    else
+      if d > 0 do
+        int_to_string(d) ++ " over par"
+      else
+        int_to_string(0 - d) ++ " under par"
+      end
+    end
+  end
+
+  pfn par_go(hs : List(PuttHole), n : Int, acc : Int) : Int needs () do
+    match hs do
+    Nil -> acc
+    Cons(h, rest) -> if n <= 0 do acc else par_go(rest, n - 1, acc + h.par) end
+    end
+  end
+
+  doc """The par of the first n holes."""
+  fn par_through(n : Int) : Int needs () do
+    par_go(Putt.Course.holes(), n, 0)
+  end
+
+  doc """Strokes over (or under) par on the holes finished so far."""
+  fn running(s : PuttState) : Int needs () do
+    Putt.Rules.total(s) - par_through(List.length(s.card))
+  end
+
+  doc """Whether the hole the state is on ended with the ball in the cup: a holed ball rests on the cup's centre."""
+  fn holed(s : PuttState) : Bool needs () do
+    let h = Putt.Rules.current(s)
+    equal(s.ball, h.cup)
+  end
+
+  doc """HOLE 3/9."""
+  fn hole_line(s : PuttState) : String needs () do
+    "HOLE " ++ int_to_string(s.hole + 1) ++ "/" ++ int_to_string(Putt.Course.hole_count())
+  end
+
+  doc """The hole's name and par: Bunker - par 3."""
+  fn par_line(s : PuttState) : String needs () do
+    let h = Putt.Rules.current(s)
+    h.title ++ " - par " ++ int_to_string(h.par)
+  end
+
+  doc """The stroke about to be played, or how the hole went."""
+  fn stroke_line(s : PuttState) : String needs () do
+    match s.phase do
+    PuttAiming -> "STROKE " ++ int_to_string(s.strokes + 1)
+    PuttHoleDone -> if holed(s) do "IN " ++ int_to_string(s.strokes) else "PICKED UP" end
+    PuttCourseDone -> "DONE"
+    end
+  end
+
+  doc """The running score: Score E before a hole is finished, Score +2 thru 3 after."""
+  fn score_line(s : PuttState) : String needs () do
+    let played = List.length(s.card)
+    if played == 0 do
+      "Score E"
+    else
+      "Score " ++ versus_par(running(s)) ++ " thru " ++ int_to_string(played)
+    end
+  end
+
+  doc """How a hole went, as a golfer would say it."""
+  fn verdict(strokes : Int, par : Int, in_cup : Bool) : String needs () do
+    let d = strokes - par
+    if !in_cup do
+      "Picked up after " ++ int_to_string(strokes)
+    else
+      if strokes == 1 do
+        "Hole in one!"
+      else
+        if d <= -3 do
+          "Albatross!"
+        else
+          if d == -2 do
+            "Eagle!"
+          else
+            if d == -1 do
+              "Birdie!"
+            else
+              if d == 0 do
+                "Par"
+              else
+                if d == 1 do
+                  "Bogey"
+                else
+                  if d == 2 do
+                    "Double bogey"
+                  else
+                    int_to_string(d) ++ " over par"
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  pfn strokes_words(n : Int) : String needs () do
+    if n == 1 do "1 stroke" else int_to_string(n) ++ " strokes" end
+  end
+
+  doc """The card's headline: the hole's verdict, or that the course is done."""
+  fn card_title(s : PuttState) : String needs () do
+    match s.phase do
+    PuttAiming -> ""
+    PuttHoleDone -> do
+      let h = Putt.Rules.current(s)
+      verdict(s.strokes, h.par, holed(s))
+    end
+    PuttCourseDone -> "Course done"
+    end
+  end
+
+  doc """Under the headline: the hole in numbers, or the course's."""
+  fn card_detail(s : PuttState) : String needs () do
+    match s.phase do
+    PuttAiming -> ""
+    PuttHoleDone -> do
+      let h = Putt.Rules.current(s)
+      "Hole " ++ int_to_string(s.hole + 1) ++ ": " ++ strokes_words(s.strokes) ++ ", par " ++ int_to_string(h.par)
+    end
+    PuttCourseDone -> do
+      strokes_words(Putt.Rules.total(s)) ++ ", par " ++ int_to_string(Putt.Course.course_par())
+    end
+    end
+  end
+
+  doc """The total under the card: Total 7, 1 over par."""
+  fn total_line(s : PuttState) : String needs () do
+    "Total " ++ int_to_string(Putt.Rules.total(s)) ++ ", " ++ par_words(running(s))
+  end
+
+  doc """What a tap does now, as the card's button says it."""
+  fn card_prompt(s : PuttState) : String needs () do
+    match s.phase do
+    PuttAiming -> ""
+    PuttHoleDone -> do
+      if s.hole + 1 < Putt.Course.hole_count() do
+        "Tap for hole " ++ int_to_string(s.hole + 2)
+      else
+        "Tap for the final card"
+      end
+    end
+    PuttCourseDone -> "Tap to play again"
+    end
+  end
+
+  doc """
+  The wind's strength as a number: 0 is still, 10 is wind_max on both axes.
+  Not held to 10: a hole that multiplies its wind reads past it, as it plays.
+  """
+  fn wind_force(rs : PuttRules, w : Vec2) : Int needs () do
+    let strongest = rs.tune.wind_max *. Math.sqrt(2.0)
+    float_round(10.0 *. length(w) /. strongest)
+  end
+
+  doc """Wind 6, or Calm."""
+  fn wind_line(rs : PuttRules, w : Vec2) : String needs () do
+    let f = wind_force(rs, w)
+    if f == 0 do "Calm" else "Wind " ++ int_to_string(f) end
+  end
+
+  doc """What the bottom band says with no pointer down."""
+  fn hint() : String needs () do
+    "Drag back anywhere, let go to putt"
+  end
+
+  doc """What the bottom band says while a pull is held: its power, or that letting go cancels."""
+  fn pull_line(a : AimTuning, pull : Vec2) : String needs () do
+    let pulled = length(pull)
+    if pulled > a.dead do
+      "Power " ++ int_to_string(float_round(100.0 *. Putt.Aim.strength(a, pulled))) ++ "%"
+    else
+      "Let go here to cancel"
+    end
+  end
+
+  -- The card's three rows, one entry a hole.
+  pfn numbers_go(i : Int, n : Int, acc : List(String)) : List(String) needs () do
+    if i >= n do
+      List.reverse(acc)
+    else
+      numbers_go(i + 1, n, Cons(int_to_string(i + 1), acc))
+    end
+  end
+
+  doc """The card's hole numbers, 1 to the last hole."""
+  fn card_numbers() : List(String) needs () do
+    numbers_go(0, Putt.Course.hole_count(), [])
+  end
+
+  pfn pars_go(hs : List(PuttHole), acc : List(Int)) : List(Int) needs () do
+    match hs do
+    Nil -> List.reverse(acc)
+    Cons(h, rest) -> pars_go(rest, Cons(h.par, acc))
+    end
+  end
+
+  doc """Every hole's par, first hole first."""
+  fn card_pars() : List(Int) needs () do
+    pars_go(Putt.Course.holes(), [])
+  end
+
+  pfn strokes_go(pars : List(Int), card : List(Int), acc : List(Option(Int))) : List(Option(Int)) needs () do
+    match pars do
+    Nil -> List.reverse(acc)
+    Cons(_, more) -> do
+      match card do
+      Nil -> strokes_go(more, [], Cons(None, acc))
+      Cons(n, rest) -> strokes_go(more, rest, Cons(Some(n), acc))
+      end
+    end
+    end
+  end
+
+  doc """Every hole's strokes, None for a hole not finished yet."""
+  fn card_strokes(s : PuttState) : List(Option(Int)) needs () do
+    strokes_go(card_pars(), s.card, [])
+  end
+
+  doc """A card entry as text: the strokes, or a dash for a hole not played."""
+  fn strokes_text(n : Option(Int)) : String needs () do
+    match n do
+    Some(k) -> int_to_string(k)
+    None -> "-"
+    end
+  end
+
+  -- ===================================================================
+  -- Layout
+  -- ===================================================================
+  doc """
+  CSS pixels along the top for everything written: two lines of hole, wind
+  and score (to 62), then a row for the hint or the pull's power and the
+  new-game button.
+  """
+  fn top_band() : Float needs () do
+    104.0
+  end
+
+  doc """
+  CSS pixels along the bottom left to the page: web/index.html lays its own
+  strip of links over the canvas there. Nothing is written in it.
+  """
+  fn bottom_band() : Float needs () do
+    44.0
+  end
+
+  doc """Course metres of ground shown round the hole."""
+  fn edge() : Float needs () do
+    0.2
+  end
+
+  doc """The width the bands' text is laid out in: the screen's, 440 px at most, centred."""
+  fn column(vp : Arcade.Camera.Viewport) : Float needs () do
+    Arcade.Num.min_float(vp.width, 440.0)
+  end
+
+  doc """
+  The camera for a hole: straight down, the hole and its edge fitted into
+  the screen between the two bands and centred there. On a screen too short
+  for the bands the hole keeps half the height.
+  """
+  fn rig(h : PuttHole, vp : Arcade.Camera.Viewport) : Arcade.Camera.Rig needs () do
+    let bands = top_band() +. bottom_band()
+    let room = Arcade.Num.max_float(vp.height -. bands, vp.height /. 2.0)
+    let above = (vp.height -. room) *. top_band() /. bands
+    let tall = h.length +. 2.0 *. edge()
+    let wide = h.width +. 2.0 *. edge()
+    let k = Arcade.Num.min_float(room /. tall, vp.width /. wide)
+    let lower = above +. room /. 2.0 -. vp.height /. 2.0
+    let mid = Arcade.Vec3.vec3(h.width /. 2.0, h.length /. 2.0 +. lower /. k, 0.0)
+    {
+      pose: {
+        eye: Arcade.Vec3.vec3(mid.x, mid.y, Putt.View.height()),
+        target: mid,
+        up: Arcade.Vec3.vec3(0.0, 1.0, 0.0)
+      },
+      lens: Orthographic(vp.height /. k)
+    }
+  end
+
+  doc """The camera for a hole, ready to project onto the viewport."""
+  fn projection(rs : PuttRules, h : PuttHole, vp : Arcade.Camera.Viewport) : Arcade.Camera.Projection needs () do
+    Arcade.Camera.projection(rs.num, rig(h, vp), vp)
+  end
+
+  doc """Where the new-game button is: the right end of the top band's lower row."""
+  fn new_game_box(vp : Arcade.Camera.Viewport) : HudBox needs () do
+    let right = vp.width /. 2.0 +. column(vp) /. 2.0 -. 8.0
+    { left: right -. 86.0, top: 68.0, right: right, bottom: 96.0 }
+  end
+
+  doc """Whether a screen point is inside a box, edges included."""
+  fn in_box(b : HudBox, p : Vec2) : Bool needs () do
+    p.x >= b.left && p.x <= b.right && p.y >= b.top && p.y <= b.bottom
+  end
+
+  doc """A box's centre."""
+  fn box_centre(b : HudBox) : Vec2 needs () do
+    vec2((b.left +. b.right) /. 2.0, (b.top +. b.bottom) /. 2.0)
+  end
+
+  -- ===================================================================
+  -- Drawing
+  -- ===================================================================
+  pfn white() : Rgba needs () do
+    hex(16119280)
+  end
+
+  pfn dim() : Rgba needs () do
+    with_alpha(hex(16119280), 0.7)
+  end
+
+  pfn gold() : Rgba needs () do
+    hex(16765762)
+  end
+
+  pfn identity() : Affine needs () do
+    { a: 1.0, b: 0.0, c: 0.0, d: 1.0, e: 0.0, f: 0.0 }
+  end
+
+  pfn text(words : String, font : String, x : Float, y : Float, ink : Rgba) : DrawOp needs () do
+    DrawText({ words: words, font: font, middle: vec2(x, y), fill: ink, edge: None, frame: identity() })
+  end
+
+  pfn pen(ink : Rgba, width : Float) : Pen needs () do
+    { ink: ink, width: width, ends: RoundEnd, corners: RoundCorner }
+  end
+
+  pfn line(a : Vec2, b : Vec2) : Shape needs () do
+    Outline([MoveTo(a), LineTo(b)])
+  end
+
+  -- A rectangle with corners rounded by r.
+  pfn rounded(b : HudBox, r : Float) : Shape needs () do
+    Outline([MoveTo(vec2(b.left +. r, b.top)), LineTo(vec2(b.right -. r, b.top)), QuadTo(vec2(b.right, b.top), vec2(b.right, b.top +. r)), LineTo(vec2(b.right, b.bottom -. r)), QuadTo(vec2(b.right, b.bottom), vec2(b.right -. r, b.bottom)), LineTo(vec2(b.left +. r, b.bottom)), QuadTo(vec2(b.left, b.bottom), vec2(b.left, b.bottom -. r)), LineTo(vec2(b.left, b.top +. r)), QuadTo(vec2(b.left, b.top), vec2(b.left +. r, b.top)), ClosePath])
+  end
+
+  doc """Sky blue for a wind up to 10, amber for one past it."""
+  fn wind_ink(force : Int) : Rgba needs () do
+    if force > 10 do hex(16765762) else hex(10474495) end
+  end
+
+  doc """
+  The wind as a compass at `c`: a ring, and an arrow through its centre
+  pointing the way the wind pulls the ball, longer the harder it blows up to
+  a force of 10, where it spans the ring. A still hole gets the ring and a
+  dot.
+  """
+  fn compass_ops(rs : PuttRules, c : Vec2, w : Vec2) : List(DrawOp) needs () do
+    let force = wind_force(rs, w)
+    let sky = wind_ink(force)
+    let ring = StrokeShape(Disc(c, 15.0), pen(with_alpha(sky, 0.45), 1.5), Over)
+    if force == 0 do
+      [ring, FillShape(Disc(c, 2.5), Flat(sky), Over)]
+    else
+      do
+        let d = normalized(vec2(w.x, 0.0 -. w.y))
+        let side = vec2(0.0 -. d.y, d.x)
+        let reach = 5.0 +. int_to_float(Arcade.Num.clamp_int(force, 0, 10))
+        let tail = sub(c, scale(d, reach))
+        let tip = add(c, scale(d, reach))
+        let neck = sub(tip, scale(d, 7.0))
+        let head = Poly([tip, add(neck, scale(side, 4.5)), sub(neck, scale(side, 4.5))])
+        [
+          ring,
+          StrokeShape(line(tail, neck), pen(sky, 3.0), Over),
+          FillShape(head, Flat(sky), Over)
+        ]
+      end
+    end
+  end
+
+  doc """The top band's two lines: the hole and its par on the left, the wind in the middle, the stroke and the score on the right."""
+  fn top_ops(rs : PuttRules, s : PuttState, vp : Arcade.Camera.Viewport) : List(DrawOp) needs () do
+    let mid = vp.width /. 2.0
+    let out = column(vp) /. 2.0 -. 80.0
+    List.append([text(hole_line(s), "bold 17px sans-serif", mid -. out, 20.0, white()), text(par_line(s), "13px sans-serif", mid -. out, 42.0, dim()), text(stroke_line(s), "bold 17px sans-serif", mid +. out, 20.0, white()), text(score_line(s), "13px sans-serif", mid +. out, 42.0, dim())], List.append(compass_ops(rs, vec2(mid, 22.0), s.wind), [text(wind_line(rs, s.wind), "12px sans-serif", mid, 50.0, wind_ink(wind_force(rs, s.wind)))]))
+  end
+
+  doc """The new-game button."""
+  fn new_game_ops(vp : Arcade.Camera.Viewport) : List(DrawOp) needs () do
+    let b = new_game_box(vp)
+    let c = box_centre(b)
+    [
+      StrokeShape(rounded(b, 8.0), pen(with_alpha(white(), 0.45), 1.5), Over),
+      text("New game", "13px sans-serif", c.x, c.y, dim())
+    ]
+  end
+
+  -- Where the lower row's words go: left of the new-game button.
+  pfn hint_x(vp : Arcade.Camera.Viewport) : Float needs () do
+    vp.width /. 2.0 -. 47.0
+  end
+
+  -- Green for a soft putt, through amber, to red for the strongest.
+  pfn power_ink(strength : Float) : Rgba needs () do
+    if strength < 0.5 do
+      mix(hex(8311626), hex(16765762), strength *. 2.0)
+    else
+      mix(hex(16765762), hex(15221311), (strength -. 0.5) *. 2.0)
+    end
+  end
+
+  doc """The top band's lower row: what to do, or the power of the pull being held, and the new-game button."""
+  fn prompt_ops(a : AimTuning, s : PuttState, vp : Arcade.Camera.Viewport, moment : HudMoment) : List(DrawOp) needs () do
+    let x = hint_x(vp)
+    let words =
+      match moment do
+      HudRolling -> []
+      HudWaiting -> do
+        match s.phase do
+        PuttAiming -> [text(hint(), "13px sans-serif", x, 82.0, dim())]
+        PuttHoleDone -> []
+        PuttCourseDone -> []
+        end
+      end
+      HudPulling(pull) -> do
+        let strength = Putt.Aim.strength(a, length(pull))
+        let bar = { left: x -. 80.0, top: 87.0, right: x +. 80.0, bottom: 95.0 }
+        let filled = { bar with right: bar.left +. 8.0 +. 152.0 *. strength }
+        [
+          text(pull_line(a, pull), "bold 14px sans-serif", x, 75.0, white()),
+          FillShape(rounded(bar, 4.0), Flat(with_alpha(white(), 0.2)), Over),
+          FillShape(rounded(filled, 4.0), Flat(power_ink(strength)), Over)
+        ]
+      end
+      end
+    List.append(words, new_game_ops(vp))
+  end
+
+  pfn dot_ops(rs : PuttRules, l : Arcade.Camera.Projection, ps : List(Vec2), acc : List(DrawOp)) : List(DrawOp) needs () do
+    match ps do
+    Nil -> List.reverse(acc)
+    Cons(p, rest) -> do
+      dot_ops(rs, l, rest, Cons(FillShape(Disc(Putt.View.px(rs, l, p), 2.5), Flat(with_alpha(white(), 0.9)), Over), acc))
+    end
+    end
+  end
+
+  doc """A ring round the ball at rest, so a 2 px ball can be found."""
+  fn ball_ring_ops(rs : PuttRules, l : Arcade.Camera.Projection, ball : Vec2) : List(DrawOp) needs () do
+    [
+      StrokeShape(Disc(Putt.View.px(rs, l, ball), 13.0), pen(with_alpha(white(), 0.55), 2.0), Over)
+    ]
+  end
+
+  doc """
+  A held pull on the green: the band from the ball back along the pull (as
+  long as the pull, the full pull at most), and the preview's dots with a
+  ring where the first leg ends, gold when it ends in the cup. Inside the
+  dead zone only the ring round the ball.
+  """
+  fn aim_ops(rs : PuttRules, a : AimTuning, l : Arcade.Camera.Projection, s : PuttState, pull : Vec2) : List(DrawOp) needs () do
+    match Putt.Aim.shot_of_pull(rs, a, pull) do
+    None -> ball_ring_ops(rs, l, s.ball)
+    Some(shot) -> do
+      let seen = Putt.Aim.preview(rs, a, Putt.Rules.current(s), s.ball, shot)
+      let at = Putt.View.px(rs, l, s.ball)
+      let pulled = length(pull)
+      let back = add(at, scale(pull, Arcade.Num.min_float(pulled, a.full) /. pulled))
+      let ink = if seen.holes do gold() else white() end
+      let band =
+        [
+          StrokeShape(line(at, back), pen(with_alpha(white(), 0.5), 3.0), Over),
+          FillShape(Disc(back, 5.0), Flat(with_alpha(white(), 0.8)), Over)
+        ]
+      List.append(band, List.append(dot_ops(rs, l, seen.dots, []), [StrokeShape(Disc(Putt.View.px(rs, l, seen.ends), 7.0), pen(ink, 2.5), Over)]))
+    end
+    end
+  end
+
+  -- One row of the card: its label, then a cell a hole.
+  pfn row_ops(label : String, cells : List((String, Rgba)), x0 : Float, step : Float, y : Float, font : String) : List(DrawOp) needs () do
+    Cons(text(label, "12px sans-serif", x0 -. 30.0, y, dim()), cell_ops(cells, x0, step, y, font, []))
+  end
+
+  pfn cell_ops(cells : List((String, Rgba)), x : Float, step : Float, y : Float, font : String, acc : List(DrawOp)) : List(DrawOp) needs () do
+    match cells do
+    Nil -> List.reverse(acc)
+    Cons((words, ink), rest) -> do
+      cell_ops(rest, x +. step, step, y, font, Cons(text(words, font, x, y, ink), acc))
+    end
+    end
+  end
+
+  pfn plain(words : List(String), ink : Rgba, acc : List((String, Rgba))) : List((String, Rgba)) needs () do
+    match words do
+    Nil -> List.reverse(acc)
+    Cons(w, rest) -> plain(rest, ink, Cons((w, ink), acc))
+    end
+  end
+
+  pfn par_texts(pars : List(Int), acc : List(String)) : List(String) needs () do
+    match pars do
+    Nil -> List.reverse(acc)
+    Cons(p, rest) -> par_texts(rest, Cons(int_to_string(p), acc))
+    end
+  end
+
+  -- A hole's strokes, green under par, white on it, red over it.
+  pfn scored(pars : List(Int), strokes : List(Option(Int)), acc : List((String, Rgba))) : List((String, Rgba)) needs () do
+    match (pars, strokes) do
+    (Cons(p, more), Cons(Some(n), rest)) -> do
+      let ink =
+        if n < p do
+          hex(8311626)
+        else
+          if n == p do white() else hex(16747646) end
+        end
+      scored(more, rest, Cons((int_to_string(n), ink), acc))
+    end
+    (Cons(_, more), Cons(None, rest)) -> scored(more, rest, Cons(("-", dim()), acc))
+    (_, _) -> List.reverse(acc)
+    end
+  end
+
+  doc """How many holes a row of the card holds."""
+  fn card_row() : Int needs () do
+    9
+  end
+
+  doc """How many blocks of rows the card needs for the course."""
+  fn card_blocks() : Int needs () do
+    (Putt.Course.hole_count() + card_row() - 1) / card_row()
+  end
+
+  -- The card's blocks, top down: each three rows (hole, par, you) of up to
+  -- card_row() holes.
+  pfn block_ops(numbers : List(String), pars : List(Int), strokes : List(Option(Int)), x0 : Float, step : Float, y : Float, acc : List(DrawOp)) : List(DrawOp) needs () do
+    match numbers do
+    Nil -> acc
+    Cons(_, _) -> do
+      let n = card_row()
+      let rows =
+        List.concat([row_ops("Hole", plain(List.take(numbers, n), dim(), []), x0, step, y, "12px sans-serif"), row_ops("Par", plain(par_texts(List.take(pars, n), []), white(), []), x0, step, y +. 22.0, "14px sans-serif"), row_ops("You", scored(List.take(pars, n), List.take(strokes, n), []), x0, step, y +. 44.0, "bold 15px sans-serif")])
+      block_ops(List.drop(numbers, n), List.drop(pars, n), List.drop(strokes, n), x0, step, y +. 76.0, List.append(acc, rows))
+    end
+    end
+  end
+
+  doc """How tall the card is, in CSS pixels."""
+  fn card_height() : Float needs () do
+    212.0 +. 76.0 *. int_to_float(card_blocks())
+  end
+
+  doc """
+  The scorecard over a finished hole or course: the field dimmed, a panel
+  with the headline, the hole or course in numbers, every hole's par and
+  strokes, the total against par, and what a tap does.
+  """
+  fn card_ops(s : PuttState, vp : Arcade.Camera.Viewport) : List(DrawOp) needs () do
+    let w = Arcade.Num.min_float(vp.width -. 24.0, 360.0)
+    let tall = card_height()
+    let mid = vp.width /. 2.0
+    let top = Arcade.Num.max_float(vp.height /. 2.0 -. tall /. 2.0, 4.0)
+    let panel =
+      {
+        left: mid -. w /. 2.0,
+        top: top,
+        right: mid +. w /. 2.0,
+        bottom: top +. tall
+      }
+    let screen =
+      Poly([vec2(0.0, 0.0), vec2(vp.width, 0.0), vec2(vp.width, vp.height), vec2(0.0, vp.height)])
+    let step = Arcade.Num.min_float((w -. 80.0) /. int_to_float(card_row()), 30.0)
+    let shown =
+      Arcade.Num.min_float(int_to_float(Putt.Course.hole_count()), int_to_float(card_row()))
+    let x0 = mid +. 20.0 -. step *. (shown -. 1.0) /. 2.0
+    let below = top +. 104.0 +. 76.0 *. int_to_float(card_blocks())
+    let button =
+      {
+        left: mid -. 110.0,
+        top: below +. 36.0,
+        right: mid +. 110.0,
+        bottom: below +. 78.0
+      }
+    let head =
+      [
+        FillShape(screen, Flat(with_alpha(hex(0), 0.45)), Over),
+        FillShape(rounded(panel, 14.0), Flat(with_alpha(hex(1451805), 0.96)), Over),
+        StrokeShape(rounded(panel, 14.0), pen(with_alpha(white(), 0.25), 1.5), Over),
+        text(card_title(s), "bold 26px sans-serif", mid, top +. 36.0, gold()),
+        text(card_detail(s), "15px sans-serif", mid, top +. 66.0, white())
+      ]
+    let foot =
+      [
+        text(total_line(s), "bold 16px sans-serif", mid, below +. 10.0, white()),
+        FillShape(rounded(button, 12.0), Flat(hex(4168522)), Over),
+        text(card_prompt(s), "bold 16px sans-serif", mid, below +. 57.0, white())
+      ]
+    List.concat([head, block_ops(card_numbers(), card_pars(), card_strokes(s), x0, step, top +. 104.0, []), foot])
+  end
+
+  doc """
+  One frame, back to front: the hole (Putt.View.field_ops through this
+  module's camera), the ring round a resting ball or the held pull's
+  preview, the ball at `ball`, the top band, and the scorecard once the
+  hole or the course is done. While a putt rolls, `s` is the state it was
+  struck from and `ball` a point of its path.
+  """
+  fn frame(rs : PuttRules, a : AimTuning, s : PuttState, vp : Arcade.Camera.Viewport, ball : Vec2, moment : HudMoment) : List(DrawOp) needs () do
+    let h = Putt.Rules.current(s)
+    let l = projection(rs, h, vp)
+    let aiming =
+      match moment do
+      HudRolling -> []
+      HudWaiting -> do
+        match s.phase do
+        PuttAiming -> ball_ring_ops(rs, l, ball)
+        PuttHoleDone -> []
+        PuttCourseDone -> []
+        end
+      end
+      HudPulling(pull) -> do
+        match s.phase do
+        PuttAiming -> aim_ops(rs, a, l, s, pull)
+        PuttHoleDone -> []
+        PuttCourseDone -> []
+        end
+      end
+      end
+    let card =
+      match s.phase do
+      PuttAiming -> []
+      PuttHoleDone -> card_ops(s, vp)
+      PuttCourseDone -> card_ops(s, vp)
+      end
+    List.concat([Putt.View.field_ops(rs, l, h), aiming, Putt.View.ball_ops(rs, l, ball), top_ops(rs, s, vp), prompt_ops(a, s, vp, moment), card])
+  end
+
+end
