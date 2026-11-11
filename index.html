@@ -100,7 +100,7 @@
       </ul>
     </article>
     <article>
-      <h3><code>arcade_physics</code></h3>
+      <h3><code>arcade-physics</code></h3>
       <p class="kind">lib &middot; depends on <code>arcade</code></p>
       <p>Fixed-step simulation, kinematics, the libm replay seam and gesture
       measurement. Pure.</p>
@@ -112,7 +112,7 @@
       </ul>
     </article>
     <article>
-      <h3><code>arcade_testkit</code></h3>
+      <h3><code>arcade-testkit</code></h3>
       <p class="kind">lib &middot; depends on <code>arcade</code> &middot; a dev-dep</p>
       <p>The suite harness, golden-row readers and digests. It holds IO and panics, so
       it goes on test paths only.</p>
@@ -125,22 +125,22 @@
   </div>
 
   <h3 class="sub">The dependency lines</h3>
-  <p>The packages are not in the forge registry yet. Once 0.1.0 is published, a game's
-  <code>forge.toml</code> names them by version:</p>
+  <p>The three packages are on <a href="https://forgepm.org/packages/arcade">forgepm.org</a>
+  at 0.1.0. A game's <code>forge.toml</code> names them by version:</p>
 <pre><code>[deps]
 arcade = "0.1.0"
-arcade_physics = "0.1.0"      # only if it uses Arcade.Physics
+arcade-physics = "0.1.0"      # only if it uses Arcade.Physics
 
 [dev-deps]
-arcade_testkit = "0.1.0"</code></pre>
-  <p>Until then, and for a game that lives in the engine's source tree as the example
-  does, by path:</p>
+arcade-testkit = "0.1.0"</code></pre>
+  <p>A game that lives in the engine's source tree, as the example does, names
+  them by path:</p>
 <pre><code>[deps]
 arcade = { path = "../.." }
-arcade_physics = { path = "../../physics" }
+arcade-physics = { path = "../../physics" }
 
 [dev-deps]
-arcade_testkit = { path = "../../testkit" }</code></pre>
+arcade-testkit = { path = "../../testkit" }</code></pre>
 </section>
 
 <section id="plug-in">
