@@ -216,6 +216,34 @@ Never run a bare `forge format`: on this toolchain it can delete the body of a
 `match do` or a multi-statement lambda. Use `make format` (`scripts/format.sh`),
 which formats one file at a time and refuses a result that lost code.
 
+## Site
+
+The library's site is https://notactuallytreyanastasio.github.io/arcade/ : a
+landing page (`site/`, plain HTML and CSS) and, under `putt/`, the example
+game as `make -C examples/putt web` builds it. GitHub Pages serves it from the
+`gh-pages` branch. There is no March toolchain in CI, so the site is built and
+pushed from a machine that has `march`:
+
+```sh
+scripts/pages.sh build [OUT]   # make site: the demo build and the landing page, assembled
+                               # in OUT (default .forge/site); fails if a file the site
+                               # names is missing or is named by an absolute path
+scripts/pages.sh serve         # make serve-site: the same, served under the prefix Pages
+                               # uses, http://127.0.0.1:8341/arcade/ (PORT=... to change)
+scripts/pages.sh deploy        # make deploy-site: commits OUT as the new tip of gh-pages
+                               # (parent: the remote's gh-pages) and pushes it. Refuses a
+                               # dirty tree; touches no local branch, index or work tree
+scripts/pages.sh shot          # retakes site/putt.png and site/card.png in headless Chrome;
+                               # PLAYTEST_MODULES=<dir whose node_modules has puppeteer-core>
+```
+
+The landing page's code example is copied from
+`examples/putt/shell/putt_shell.march` (`fn hooks`, `fn main`) by every build,
+and `scripts/pages.sh snippet` writes the same copy back into
+`site/index.html`. Its two pictures are committed and are not retaken by a
+build: run `shot` after the game's look changes. Both pages carry the
+deployed URL in their `og:url` and `og:image` tags, which must be absolute.
+
 ## Publishing
 
 The three packages are versioned together (0.1.0, see each `CHANGELOG.md`)
