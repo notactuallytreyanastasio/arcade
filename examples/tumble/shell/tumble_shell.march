@@ -1,0 +1,133 @@
+mod TumbleShell do
+
+  -- Tumble's browser shell, and the entry point of its browser build
+  -- (dist/tumble.mjs). This is the imperative edge of the game and it is all
+  -- there is of it: every fn here either hands the outside world to
+  -- Tumble.App as a message, or carries out what Tumble.App answered.
+  --
+  --   messages  the frame's time, the window's size, the pointer, the keys
+  --             (TumbleKeys), the page being hidden
+  --   effects   audio commands to Arcade.Web.Audio, meshes to TumbleGl, a
+  --             buzz to the vibrator
+  --   a frame   Tumble.App.overlay painted on the 2D canvas by the runtime,
+  --             Tumble.App.picture drawn on the WebGL canvas under it
+  --   marks     Tumble.App.marks, for a playtest
+  --
+  -- Tumble.App is `cap pure`; this module `needs IO.Foreign`. No rule, no
+  -- number and no word of the game is in this file.
+  needs IO.Foreign
+
+  -- The model as the runtime holds it (see Arcade.Web.Runtime.WebHooks).
+  type Held = HeldModel(TumbleModel)
+
+  fn unheld(b : Held) : TumbleModel do
+    match b do
+    HeldModel(m) -> m
+    end
+  end
+
+  fn held(r : (TumbleModel, List(TumbleFx))) : (Held, List(TumbleFx)) do
+    let (m, effects) = r
+    (HeldModel(m), effects)
+  end
+
+  fn boot(w : Float, h : Float, seed : U64) : (Held, List(TumbleFx)) do
+    TumbleAudio.start()
+    held(Tumble.App.boot(w, h, seed))
+  end
+
+  -- ---- Effects ----
+  fn effect(e : TumbleFx) : () do
+    match e do
+    FxAudio(cmds) -> TumbleAudio.route(cmds)
+    FxMeshes(ms) -> List.each(ms, TumbleGl.upload)
+    FxBuzz(ms) -> Arcade.Web.Glue.vibrate(ms)
+    end
+  end
+
+  fn perform(effects : List(TumbleFx)) : () do
+    List.each(effects, effect)
+  end
+
+  -- ---- Messages ----
+  -- The newest of a batch of pointer samples, as a place.
+  fn newest(raw : List((Float, Float, Float))) : Option(Vec2) do
+    match raw do
+    Nil -> None
+    Cons((_, x, y), Nil) -> Some(Arcade.Vec2.vec2(x, y))
+    Cons(_, rest) -> newest(rest)
+    end
+  end
+
+  fn down(raw : List((Float, Float, Float))) : Option(TumbleMsg) do
+    Option.map(newest(raw), fn at -> TmDown(at))
+  end
+
+  fn move(raw : List((Float, Float, Float))) : Option(TumbleMsg) do
+    Option.map(newest(raw), fn at -> TmMove(at))
+  end
+
+  fn up(raw : List((Float, Float, Float))) : Option(TumbleMsg) do
+    Option.map(newest(raw), fn at -> TmUp(at))
+  end
+
+  fn key(dispatch : TumbleMsg -> (), code : String, held_down : Bool) : () do
+    match Tumble.App.key_of(code) do
+    Some(k) -> dispatch(TmKey(k, held_down))
+    None -> ()
+    end
+  end
+
+  fn listen(dispatch : TumbleMsg -> ()) : () do
+    TumbleKeys.listen(fn pair ->
+      match pair do
+      (code, held_down) -> key(dispatch, code, held_down)
+      end
+    )
+  end
+
+  -- ---- The 3D picture ----
+  fn draw(m : TumbleModel) : () do
+    TumbleGl.frame(m.view_w, m.view_h, Arcade.Web.Glue.device_pixel_ratio(), Tumble.App.picture(m))
+  end
+
+  -- The runtime's overlay hook: draw, and send it no messages.
+  fn drawn(m : TumbleModel) : List(TumbleMsg) do
+    draw(m)
+    []
+  end
+
+  -- ---- Launch ----
+  fn hooks() : Arcade.Web.Runtime.WebHooks(Held, TumbleMsg, TumbleFx) do
+    {
+      hook_num: Arcade.Numerics.make(),
+      hook_boot: fn (w, h, seed) -> boot(w, h, seed),
+      hook_update: fn (b, x) -> held(Tumble.App.update(unheld(b), x)),
+      hook_perform: fn (_dispatch, effects) -> perform(effects),
+      hook_tick: fn t -> TmTick(t),
+      hook_resize: fn (w, h) -> TmResize(w, h),
+      hook_down: fn raw -> down(raw),
+      hook_move: fn raw -> move(raw),
+      hook_up: fn raw -> up(raw),
+      hook_cancel: Some(TmCancel),
+      hook_listen: fn (_model, dispatch) -> listen(dispatch),
+      hook_visible: fn shown -> TmVisible(shown),
+      hook_scene: fn b -> Tumble.App.overlay(unheld(b)),
+      hook_overlay: fn b -> drawn(unheld(b)),
+      hook_settle: fn _ -> (),
+      hook_marks: fn b -> Tumble.App.marks(unheld(b))
+    }
+  end
+
+  fn main(_f : Cap(IO.Foreign)) : () do
+    if TumbleGl.open("stage") do
+      match Arcade.Web.Runtime.launch("hud", fn () -> hooks()) do
+      Ok(_) -> ()
+      Err(why) -> panic(why)
+      end
+    else
+      panic("this browser gives no WebGL context")
+    end
+  end
+
+end

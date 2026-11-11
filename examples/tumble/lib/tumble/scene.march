@@ -1,0 +1,322 @@
+mod Tumble.Scene do
+
+  -- Tumble in three dimensions, as a Tumble.Cel frame: the board as one
+  -- mesh (slabs, posts and the gate's arch), the ball, the gems and the
+  -- ball's shadow, seen by a camera that stands behind the ball and looks up
+  -- the board. The floor really tilts: the whole board is turned about the
+  -- point under the ball by the tilt the roll holds, so what the player
+  -- steers is what they see lean. Board x and y are the world's; z is up.
+  cap pure
+
+  import Arcade.Vec3
+
+  doc """The ids of the meshes a frame names."""
+  fn board_id() : Int needs () do
+    1
+  end
+
+  fn ball_id() : Int needs () do
+    2
+  end
+
+  fn gem_id() : Int needs () do
+    3
+  end
+
+  fn shade_id() : Int needs () do
+    4
+  end
+
+  -- What the picture is drawn with: metres, and shares of a full tilt.
+  --   lean       the floor's slope at a full tilt (a rise per metre)
+  --   thick      how deep a slab is
+  --   back, up, ahead   the camera: behind the point it follows, above the
+  --              floor, and how far past the point it looks
+  --   half       tan of half the vertical field of view on a wide screen;
+  --              a tall screen sees `half_wide` across instead
+  --   ink        the outline's width
+  type TumbleSight = {
+    lean : Float,
+    thick : Float,
+    back : Float,
+    up : Float,
+    ahead : Float,
+    half : Float,
+    half_wide : Float,
+    ink : Float,
+    post_height : Float
+  }
+
+  fn sight() : TumbleSight needs () do
+    {
+      lean: 0.2,
+      thick: 0.35,
+      back: 5.2,
+      up: 6.4,
+      ahead: 1.6,
+      half: 0.42,
+      half_wide: 0.36,
+      ink: 0.035,
+      post_height: 0.55
+    }
+  end
+
+  doc """Four tones, the darkest 0.42 of the colour, lit from the upper left, inked near-black on a dusk sky."""
+  fn look() : CelLook needs () do
+    {
+      bands: 4,
+      dark: 0.42,
+      light: normalized(vec3(-0.45, -0.35, 0.82)),
+      ink: Arcade.Draw.hex(1709091),
+      sky: Arcade.Draw.hex(2827584)
+    }
+  end
+
+  doc """
+  Every colour a mesh is built in. A lit pixel of the picture is one of
+  these times one of the look's tones (or the sky, the ink, a highlight or
+  the shadow), which is what a playtest holds the GPU to.
+  """
+  fn palette() : List(Rgba) needs () do
+    [Arcade.Draw.hex(10738158), Arcade.Draw.hex(12577013), Arcade.Draw.hex(14964526), Arcade.Draw.hex(16743001), Arcade.Draw.hex(16765503), Arcade.Draw.hex(16774368), Arcade.Draw.hex(16777215), Arcade.Draw.hex(4830585), Arcade.Draw.hex(6080906), Arcade.Draw.hex(8319231), Arcade.Draw.hex(9067076)]
+  end
+
+  -- ---- Meshes ----
+  -- Under the Ice power every floor tile plays as ice, and is drawn as ice.
+  pfn iced(t : TumbleTile) : TumbleTile needs () do
+    match t do
+    TileFloor -> TileIce
+    TileIce -> TileIce
+    TileGate -> TileGate
+    TileVoid -> TileVoid
+    end
+  end
+
+  pfn top_colour(t : TumbleTile, col : Int, row : Int, slick : Bool) : Rgba needs () do
+    let odd = (col + row) % 2 == 1
+    match (if slick do iced(t) else t end) do
+    TileIce -> if odd do Arcade.Draw.hex(12577013) else Arcade.Draw.hex(10738158) end
+    TileGate -> Arcade.Draw.hex(16765503)
+    TileFloor -> if odd do Arcade.Draw.hex(6080906) else Arcade.Draw.hex(4830585) end
+    TileVoid -> Arcade.Draw.hex(0)
+    end
+  end
+
+  pfn slab(rev : List(Float), st : TumbleSight, b : TumbleBoard, slick : Bool, t : TumbleTile, col : Int, row : Int) : List(Float) needs () do
+    if Tumble.Board.is_void(t) do
+      rev
+    else
+      do
+        let x = int_to_float(col)
+        let y = int_to_float(row)
+        let faces =
+          {
+            west: Tumble.Board.is_void(Tumble.Board.tile_at(b, col - 1, row)),
+            east: Tumble.Board.is_void(Tumble.Board.tile_at(b, col + 1, row)),
+            south: Tumble.Board.is_void(Tumble.Board.tile_at(b, col, row - 1)),
+            north: Tumble.Board.is_void(Tumble.Board.tile_at(b, col, row + 1)),
+            bottom: true,
+            top: true
+          }
+        Tumble.Mesh.box(rev, vec3(x, y, 0.0 -. st.thick), vec3(x +. 1.0, y +. 1.0, 0.0), top_colour(t, col, row, slick), Arcade.Draw.hex(9067076), faces)
+      end
+    end
+  end
+
+  pfn slab_line(rev : List(Float), st : TumbleSight, b : TumbleBoard, slick : Bool, line : List(TumbleTile), col : Int, row : Int) : List(Float) needs () do
+    match line do
+    Nil -> rev
+    Cons(t, rest) -> slab_line(slab(rev, st, b, slick, t, col, row), st, b, slick, rest, col + 1, row)
+    end
+  end
+
+  pfn slabs(rev : List(Float), st : TumbleSight, b : TumbleBoard, slick : Bool, lines : List(List(TumbleTile)), row : Int) : List(Float) needs () do
+    match lines do
+    Nil -> rev
+    Cons(line, rest) -> slabs(slab_line(rev, st, b, slick, line, 0, row), st, b, slick, rest, row + 1)
+    end
+  end
+
+  pfn posts(rev : List(Float), st : TumbleSight, radius : Float, ps : List(Arcade.Vec2.Vec2)) : List(Float) needs () do
+    match ps do
+    Nil -> rev
+    Cons(p, rest) -> do
+      posts(Tumble.Mesh.post(rev, vec3(p.x, p.y, 0.0), radius, st.post_height, Arcade.Draw.hex(14964526), Arcade.Draw.hex(16774368)), st, radius, rest)
+    end
+    end
+  end
+
+  -- The gate: two pillars at the sides of its tile and a beam across them.
+  pfn arch(rev : List(Float), g : TumbleCell) : List(Float) needs () do
+    let x = int_to_float(g.col)
+    let y = int_to_float(g.row) +. 0.5
+    let red = Arcade.Draw.hex(14964526)
+    let gold = Arcade.Draw.hex(16765503)
+    let left = Tumble.Mesh.box(rev, vec3(x, y -. 0.07, 0.0), vec3(x +. 0.14, y +. 0.07, 1.25), red, red, Tumble.Mesh.all_faces())
+    let right =
+      Tumble.Mesh.box(left, vec3(x +. 0.86, y -. 0.07, 0.0), vec3(x +. 1.0, y +. 0.07, 1.25), red, red, Tumble.Mesh.all_faces())
+    Tumble.Mesh.box(right, vec3(x -. 0.08, y -. 0.09, 1.25), vec3(x +. 1.08, y +. 0.09, 1.5), gold, gold, Tumble.Mesh.all_faces())
+  end
+
+  doc """
+  A board as one mesh: every tile's slab (the sides a neighbour hides left
+  out), the posts, the gate's arch. `slick` draws every floor tile as ice.
+  """
+  fn board_mesh(st : TumbleSight, tune : TumbleTuning, b : TumbleBoard, slick : Bool) : CelMesh needs () do
+    let ground = slabs([], st, b, slick, b.tiles, 0)
+    let posted = posts(ground, st, tune.post_radius, b.posts)
+    Tumble.Mesh.done(board_id(), arch(posted, Tumble.Board.gate_cell(b)))
+  end
+
+  doc """The meshes that never change: the unit ball, a gem, the unit shadow."""
+  fn fixed_meshes() : List(CelMesh) needs () do
+    [
+      Tumble.Mesh.done(ball_id(), Tumble.Mesh.sphere([], 3, Arcade.Draw.hex(16743001), Arcade.Draw.hex(16774368))),
+      Tumble.Mesh.done(gem_id(), Tumble.Mesh.gem([], 0.2, 0.3, Arcade.Draw.hex(8319231))),
+      Tumble.Mesh.done(shade_id(), Tumble.Mesh.disc([], 1.0, Arcade.Draw.hex(16777215)))
+    ]
+  end
+
+  -- ---- The camera ----
+  doc """
+  Where the camera stands and looks when it follows the floor point `at` on
+  a screen of this aspect. It looks `ahead` past the point, and further on a
+  tall screen (1.2 m more for each time the screen is taller than wide past
+  square), which puts the ball low on a phone and the road above it.
+  """
+  fn pose(st : TumbleSight, at : Arcade.Vec2.Vec2, aspect : Float) : Arcade.Camera.Pose needs () do
+    let tall = Arcade.Num.max_float(0.0, 1.0 /. aspect -. 1.0)
+    {
+      eye: vec3(at.x, at.y -. st.back, st.up),
+      target: vec3(at.x, at.y +. st.ahead +. 1.2 *. tall, 0.0),
+      up: vec3(0.0, 0.0, 1.0)
+    }
+  end
+
+  doc """
+  tan of half the vertical field of view for a screen of this aspect: `half`
+  on a wide screen; on a tall one, whatever shows `half_wide` across.
+  """
+  fn half_for(st : TumbleSight, aspect : Float) : Float needs () do
+    Arcade.Num.max_float(st.half, st.half_wide /. aspect)
+  end
+
+  doc """World to clip space for the camera following `at` on a screen of this aspect."""
+  fn view_proj(st : TumbleSight, at : Arcade.Vec2.Vec2, aspect : Float) : Mat4 needs () do
+    let p = pose(st, at, aspect)
+    let (f, r, u) = Arcade.Camera.basis(p)
+    Tumble.Mat4.mul(Tumble.Mat4.perspective(half_for(st, aspect), aspect, 0.5, 90.0), Tumble.Mat4.view(p.eye, f, r, u))
+  end
+
+  -- ---- The frame ----
+  doc """
+  The turn of the whole board for a tilt: about the point under the ball,
+  the floor's normal leant `lean` a full tilt toward the way the ball is
+  pulled, so that way is downhill.
+  """
+  fn world(st : TumbleSight, ball : TumbleBall) : Mat4 needs () do
+    let n = normalized(vec3(ball.tilt.x *. st.lean, ball.tilt.y *. st.lean, 1.0))
+    Tumble.Mat4.about(vec3(ball.at.x, ball.at.y, 0.0), Tumble.Mat4.stand_on(n))
+  end
+
+  -- What changes from frame to frame besides the run: the floor point the
+  -- camera follows, how the ball has turned as it rolled, how the gems have
+  -- spun, and the seconds the gems bob by.
+  type TumblePose = {
+    follow : Arcade.Vec2.Vec2,
+    rolled : Mat4,
+    spun : Mat4,
+    clock : Float
+  }
+
+  doc """A pose at rest over a point."""
+  fn pose_at(at : Arcade.Vec2.Vec2) : TumblePose needs () do
+    { follow: at, rolled: Tumble.Mat4.identity(), spun: Tumble.Mat4.identity(), clock: 0.0 }
+  end
+
+  -- A gem's height above the floor: a triangle wave, 0.4 to 0.55 m, once
+  -- every 1.6 s, each gem out of step with the next by its place.
+  pfn bob(clock : Float, g : Arcade.Vec2.Vec2) : Float needs () do
+    let beat = (clock +. g.x *. 0.37 +. g.y *. 0.23) /. 1.6
+    let part = beat -. int_to_float(float_floor(beat))
+    0.4 +. 0.15 *. (if part < 0.5 do part *. 2.0 else 2.0 -. part *. 2.0 end)
+  end
+
+  pfn gems(w : Mat4, p : TumblePose, st : TumbleSight, gs : List(Arcade.Vec2.Vec2)) : List(CelItem) needs () do
+    match gs do
+    Nil -> []
+    Cons(g, rest) -> do
+      let m = Tumble.Mat4.mul(w, Tumble.Mat4.mul(Tumble.Mat4.translate(vec3(g.x, g.y, bob(p.clock, g))), p.spun))
+      Cons(Tumble.Cel.item(gem_id(), m, st.ink), gems(w, p, st, rest))
+    end
+    end
+  end
+
+  doc """
+  The items of a round: the board, its gems, the ball's shadow while it is
+  on the floor, and the ball, glossy, turned as it has rolled.
+  """
+  fn items(st : TumbleSight, radius : Float, run : TumbleRun, p : TumblePose) : List(CelItem) needs () do
+    let b = run.ball
+    let w = world(st, b)
+    let ball =
+      Tumble.Mat4.mul(w, Tumble.Mat4.mul(Tumble.Mat4.translate(vec3(b.at.x, b.at.y, radius +. b.z)), Tumble.Mat4.mul(p.rolled, Tumble.Mat4.scale(radius))))
+    let shade =
+      Tumble.Mat4.mul(w, Tumble.Mat4.mul(Tumble.Mat4.translate(vec3(b.at.x, b.at.y, 0.012)), Tumble.Mat4.scale(radius *. 1.05)))
+    let ball_item = { mesh: ball_id(), model: ball, tint: Arcade.Draw.hex(16777215), alpha: 1.0, ink: st.ink, gloss: 0.9 }
+    let shade_item = { mesh: shade_id(), model: shade, tint: Arcade.Draw.hex(1183258), alpha: 0.4, ink: 0.0, gloss: 0.0 }
+    let rest =
+      match run.fate do
+      FateFalling -> [ball_item]
+      FateFell -> []
+      FateRolling -> [ball_item, shade_item]
+      FateCleared -> [ball_item, shade_item]
+      end
+    Cons(Tumble.Cel.item(board_id(), w, st.ink), List.append(gems(w, p, st, run.gems), rest))
+  end
+
+  doc """A round's frame on a screen of this aspect."""
+  fn frame(st : TumbleSight, radius : Float, run : TumbleRun, p : TumblePose, aspect : Float) : CelFrame needs () do
+    let cam = pose(st, p.follow, aspect)
+    { look: look(), view_proj: view_proj(st, p.follow, aspect), eye: cam.eye, items: items(st, radius, run, p) }
+  end
+
+  doc """A frame with nothing in it but the sky: before the first spin."""
+  fn empty(st : TumbleSight, aspect : Float) : CelFrame needs () do
+    let at = Arcade.Vec2.zero()
+    let cam = pose(st, at, aspect)
+    { look: look(), view_proj: view_proj(st, at, aspect), eye: cam.eye, items: [] }
+  end
+
+  -- ---- Motion between frames ----
+  doc """
+  The pose a frame later: the camera eased toward the ball (x at 3 a
+  second, y at 5; it stays where it is once the ball is below the floor,
+  and watches it go), the ball turned by how far it rolled (about the level
+  axis square to its travel, by distance over radius), the gems turned at
+  1.5 radians a second.
+  """
+  fn moved(p : TumblePose, before : TumbleBall, after : TumbleBall, radius : Float, dt : Float) : TumblePose needs () do
+    let d = Arcade.Vec2.sub(after.at, before.at)
+    let far = Arcade.Vec2.length(d)
+    let rolled =
+      if far > 0.0 do
+        Tumble.Mat4.squared(Tumble.Mat4.mul(Tumble.Mat4.turn(vec3(0.0 -. d.y /. far, d.x /. far, 0.0), far /. radius /. 2.0), p.rolled))
+      else
+        p.rolled
+      end
+    let follow =
+      if after.z < 0.0 do
+        p.follow
+      else
+        Arcade.Vec2.vec2(Arcade.Camera.lean_step(p.follow.x, after.at.x, dt, 3.0, 3.0), Arcade.Camera.lean_step(p.follow.y, after.at.y, dt, 5.0, 5.0))
+      end
+    {
+      follow: follow,
+      rolled: rolled,
+      spun: Tumble.Mat4.squared(Tumble.Mat4.mul(Tumble.Mat4.turn(vec3(0.0, 0.0, 1.0), dt *. 0.75), p.spun)),
+      clock: p.clock +. dt
+    }
+  end
+
+end

@@ -1,0 +1,91 @@
+mod Tumble.Cues do
+
+  -- Tumble's sounds: its own cue type, the Arcade.Synth voices each cue
+  -- starts, and the AudioCmd list a played action's events send. The rumble
+  -- bed is the ball on the floor, louder the faster it rolls.
+  cap pure
+
+  import Arcade.Synth
+
+  -- CueReel carries which reel stopped (0, 1, 2); CueClear whether the
+  -- round was a jackpot.
+  type TumbleCue =
+    CueReel(Int)
+    | CueJackpot
+    | CueGo
+    | CuePost
+    | CueRail
+    | CueGem
+    | CueEdge
+    | CueClear(Bool)
+    | CueLost
+    | CueOver
+
+  doc """The voices a cue starts: the cue table for Arcade.SynthFeed."""
+  fn voices(c : SynthConsts, cue : TumbleCue) : List(SynthVoice) needs () do
+    match cue do
+    CueReel(i) -> do
+      [
+        tone(c, WaveSquare, 330.0 +. int_to_float(i) *. 110.0, 0.14, 0.09),
+        tone(c, WaveNoise, 1800.0, 0.1, 0.03)
+      ]
+    end
+    CueJackpot -> do
+      List.append(arpeggio(c, [784.0, 988.0, 1175.0, 1568.0, 1976.0, 2349.0], 0.06, 0.2, 0.25, WaveTri), bell(c, 2093.0, 0.25, 0.36))
+    end
+    CueGo -> [bend(c, WaveTri, 523.0, 1046.0, 0.2, 0.18)]
+    CuePost -> [bend(c, WaveSquare, 520.0, 260.0, 0.16, 0.09), tone(c, WaveNoise, 900.0, 0.08, 0.04)]
+    CueRail -> [tone(c, WaveTri, 180.0, 0.18, 0.07)]
+    CueGem -> bell(c, 1568.0, 0.22, 0.0)
+    CueEdge -> [glide(c, WaveSine, 620.0, 90.0, 0.7, 0.25, 0.6)]
+    CueClear(jack) -> do
+      if jack do
+        arpeggio(c, [523.0, 659.0, 784.0, 1046.0, 1318.0, 1568.0], 0.07, 0.22, 0.3, WaveTri)
+      else
+        arpeggio(c, [523.0, 659.0, 784.0, 1046.0], 0.08, 0.2, 0.25, WaveTri)
+      end
+    end
+    CueLost -> arpeggio(c, [392.0, 330.0, 262.0], 0.14, 0.16, 0.22, WaveSquare)
+    CueOver -> arpeggio(c, [392.0, 349.0, 311.0, 262.0, 196.0], 0.16, 0.18, 0.3, WaveSquare)
+    end
+  end
+
+  fn bump_cue(b : TumbleBump) : Option(TumbleCue) needs () do
+    match b do
+    BumpPost -> Some(CuePost)
+    BumpRail -> Some(CueRail)
+    BumpGem -> Some(CueGem)
+    BumpEdge -> Some(CueEdge)
+    BumpGate -> None
+    end
+  end
+
+  doc """The commands one event sends. A spin's sounds are the reels', sent by the app as they stop."""
+  fn audio_of(e : TumbleEvent) : List(AudioCmd(TumbleCue)) needs () do
+    match e do
+    TumbleSpun(_, _) -> []
+    TumbleMet(m) -> do
+      match bump_cue(m.ev) do
+      Some(cue) -> [CmdPlay(cue)]
+      None -> []
+      end
+    end
+    TumbleCleared(_, _) -> [CmdRumble(0.0)]
+    TumbleDropped(_) -> [CmdRumble(0.0), CmdPlay(CueLost)]
+    TumbleTimedOut(_) -> [CmdRumble(0.0), CmdPlay(CueLost)]
+    TumbleEnded(_) -> [CmdPlay(CueOver)]
+    end
+  end
+
+  doc """Every command an action's events send, in order."""
+  fn audio(told : List(TumbleEvent)) : List(AudioCmd(TumbleCue)) needs () do
+    List.flat_map(told, audio_of)
+  end
+
+  doc """The rumble bed for a ball at this speed, m/s: up to 0.22 at 6 m/s, in steps of a twentieth so it is not sent every frame."""
+  fn rumble_of(speed : Float) : Float needs () do
+    let level = Arcade.Num.clamp(speed /. 6.0, 0.0, 1.0)
+    int_to_float(float_round(level *. 20.0)) /. 20.0 *. 0.22
+  end
+
+end

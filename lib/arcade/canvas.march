@@ -23,7 +23,8 @@ mod Arcade.Canvas do
   -- One CanvasRenderingContext2D call. Strings are CSS values passed through.
   -- CvArc(x, y, r, sweep) is arc(x, y, r, 0, sweep). CvRadialStyle sets
   -- fillStyle to createRadialGradient(x0, y0, r0, x1, y1, r1) with its stops.
-  -- CvTextCentred sets textAlign center and textBaseline middle.
+  -- CvTextCentred sets textAlign center and textBaseline middle. CvClearRect
+  -- is clearRect: back to transparent, inside whatever clip is in force.
   type CanvasCall =
     CvSave
     | CvRestore
@@ -41,6 +42,7 @@ mod Arcade.Canvas do
     | CvFill(FillRule)
     | CvClip(FillRule)
     | CvFillRect(Float, Float, Float, Float)
+    | CvClearRect(Float, Float, Float, Float)
     | CvStrokeStyle(String)
     | CvLineWidth(Float)
     | CvLineCap(String)
@@ -101,6 +103,7 @@ mod Arcade.Canvas do
     ClearTo(c) -> do
       push_all(p, [CvComposite("source-over"), CvFillStyle(Arcade.Draw.css(c)), CvFillRect(0.0, 0.0, p.view_w, p.view_h)])
     end
+    Wipe -> push(p, CvClearRect(0.0, 0.0, p.view_w, p.view_h))
     FillShape(sh, paint, b) -> fill(push(path(p, sh), CvComposite(blend(b))), sh, paint)
     StrokeShape(sh, pen, b) -> stroke(push(path(p, sh), CvComposite(blend(b))), pen)
     DrawText(t) -> letter(push(p, CvComposite("source-over")), t)

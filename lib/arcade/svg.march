@@ -129,6 +129,7 @@ mod Arcade.Svg do
       Tag("path", List.append([Prop("d", shape_d(sh)), Prop("fill", "none"), Prop("stroke", css(pen.ink)), Prop("stroke-width", num(pen.width)), Prop("stroke-linecap", cap_of(pen.ends)), Prop("stroke-linejoin", join_of(pen.corners))], blend_props(blend)), [])
     end
     DrawText(l) -> text_svg(l)
+    Wipe -> Words("")
     PushClip(_) -> Words("")
     PopClip -> Words("")
     end
@@ -167,7 +168,11 @@ mod Arcade.Svg do
 
   -- DrawOps as nested SVG: a PushClip opens a <g> clipped to its shape, its
   -- PopClip closes it, a stray PopClip does nothing (as Arcade.Canvas's restore)
-  -- and clips still open at the end are closed.
+  -- and clips still open at the end are closed. A Wipe drops what was made
+  -- since the innermost open clip began (everything, with none open): SVG
+  -- cannot erase, so what a wipe would have cleared is left out. Under a
+  -- clip this differs from a canvas, which also clears what was drawn before
+  -- the clip opened where the clip lets it reach.
   pfn build_ops(prefix : String, b : Built) : Built needs () do
     match b.left do
     Nil -> do
@@ -178,6 +183,7 @@ mod Arcade.Svg do
       end
     end
     Cons(PopClip, rest) -> build_ops(prefix, close_clip({ b with left: rest }))
+    Cons(Wipe, rest) -> build_ops(prefix, { b with made_rev: [], left: rest })
     Cons(PushClip(sh), rest) -> do
       let c =
         {

@@ -1,0 +1,121 @@
+mod Tumble.Cel do
+
+  -- Cel shading as data. A game describes a frame (meshes it has uploaded,
+  -- where each stands, one light, how many bands of tone) and a shell draws
+  -- it; nothing here touches a GPU. The two things that make a picture read
+  -- as a cel are both decided here:
+  --
+  --   bands  the light on a surface is not smooth. n . l is squeezed to
+  --          0...1 (half-Lambert, so the side away from the light is dim,
+  --          not black), cut into `bands` equal steps, and each step is one
+  --          flat tone between `dark` and 1. `tone` is that function; a
+  --          shell's shader must compute the same thing.
+  --   ink    every mesh is drawn a second time, turned inside out and
+  --          pushed outward along each vertex's `rim` direction, in the ink
+  --          colour: the part that shows past the first drawing is the
+  --          outline. A vertex's rim is its own direction to be pushed in,
+  --          which on a hard-edged shape is not its face's normal: push a
+  --          box's faces out along their normals and the corners come apart.
+  --
+  -- A mesh is triangles, three vertices each, twelve floats a vertex:
+  -- position, normal, colour (0...1), rim.
+  cap pure
+
+  import Arcade.Vec3
+
+  type CelMesh = { id : Int, floats : List(Float) }
+
+  -- The look of a whole frame.
+  --   bands   how many tones a lit surface has (at least 2)
+  --   dark    the darkest tone, as a share of the surface's colour
+  --   light   the unit direction toward the light
+  --   ink     the outline's colour
+  --   sky     what the frame is cleared to
+  type CelLook = {
+    bands : Int,
+    dark : Float,
+    light : Vec3,
+    ink : Rgba,
+    sky : Rgba
+  }
+
+  -- One mesh in a frame.
+  --   tint    multiplies the mesh's own colours
+  --   alpha   under 1.0 the mesh is blended and writes no depth
+  --   ink     the outline's width in world units; 0.0 draws none
+  --   gloss   0...1: how white the highlight is where the light glances
+  type CelItem = {
+    mesh : Int,
+    model : Mat4,
+    tint : Rgba,
+    alpha : Float,
+    ink : Float,
+    gloss : Float
+  }
+
+  type CelFrame = {
+    look : CelLook,
+    view_proj : Mat4,
+    eye : Vec3,
+    items : List(CelItem)
+  }
+
+  doc """The floats of a vertex."""
+  fn stride() : Int needs () do
+    12
+  end
+
+  doc """How many triangles a mesh has."""
+  fn triangles(m : CelMesh) : Int needs () do
+    List.length(m.floats) / (3 * stride())
+  end
+
+  doc """
+  The tone of a surface whose unit normal makes `n_dot_l` with the light:
+  the share of its colour it is drawn in. The band is
+  min(floor((n_dot_l / 2 + 1 / 2) bands), bands - 1), and the tone runs
+  evenly from `dark` in band 0 to 1.0 in the last.
+  """
+  fn tone(look : CelLook, n_dot_l : Float) : Float needs () do
+    let lit = Arcade.Num.clamp(n_dot_l *. 0.5 +. 0.5, 0.0, 1.0)
+    let top = look.bands - 1
+    let band = Math.min_int(float_floor(lit *. int_to_float(look.bands)), top)
+    look.dark +. (1.0 -. look.dark) *. int_to_float(band) /. int_to_float(top)
+  end
+
+  doc """Every tone a look has, darkest first."""
+  fn tones(look : CelLook) : List(Float) needs () do
+    List.map(List.range(0, look.bands), fn i ->
+      look.dark +. (1.0 -. look.dark) *. int_to_float(i) /. int_to_float(look.bands - 1)
+    )
+  end
+
+  doc """An item with no tint, opaque, with no gloss."""
+  fn item(mesh : Int, model : Mat4, ink : Float) : CelItem needs () do
+    { mesh: mesh, model: model, tint: Arcade.Draw.hex(16777215), alpha: 1.0, ink: ink, gloss: 0.0 }
+  end
+
+  -- ---- For a shell ----
+  pfn chan(x : Int) : Float needs () do
+    int_to_float(x) /. 255.0
+  end
+
+  doc """
+  A frame's own numbers as a shell takes them, thirty floats: the sky's
+  red, green and blue (0...1); the light's x, y, z; the eye's; the bands;
+  the dark tone; the ink's red, green and blue; then view_proj's sixteen.
+  """
+  fn frame_floats(f : CelFrame) : List(Float) needs () do
+    let l = f.look
+    List.append([chan(l.sky.red), chan(l.sky.green), chan(l.sky.blue), l.light.x, l.light.y, l.light.z, f.eye.x, f.eye.y, f.eye.z, int_to_float(l.bands), l.dark, chan(l.ink.red), chan(l.ink.green), chan(l.ink.blue)], Tumble.Mat4.floats(f.view_proj))
+  end
+
+  doc """
+  An item's numbers, twenty-two floats: the tint's red, green and blue; the
+  alpha; the ink's width; the gloss; then the model's sixteen.
+  """
+  fn item_floats(i : CelItem) : List(Float) needs () do
+    List.append([chan(i.tint.red), chan(i.tint.green), chan(i.tint.blue), i.alpha, i.ink, i.gloss], Tumble.Mat4.floats(i.model))
+  end
+
+end

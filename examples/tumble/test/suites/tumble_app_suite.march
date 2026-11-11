@@ -1,0 +1,390 @@
+mod Tumble.Suite.App do
+
+  -- The program and its picture, with no browser: Tumble.App is driven by
+  -- the messages a shell would send it (ticks, a key, a dragged pointer),
+  -- and what it answers (its model, its effects, its frame) is checked.
+  -- The meshes are checked as geometry (every triangle of a closed shape
+  -- faces out), the cel tone as a function (it has exactly as many values as
+  -- the look has bands), and the matrices as algebra.
+  import Arcade.Test.Harness
+
+  fn seed_of(n : Int) : Arcade.U64.U64 do
+    Arcade.U64.of_int(n)
+  end
+
+  fn near(a : Float, b : Float, tol : Float, what : String) : Outcome do
+    expect(Math.abs(a -. b) <= tol, what ++ ": got " ++ float_to_string(a) ++ ", want " ++ float_to_string(b))
+  end
+
+  -- ---- Driving the app ----
+  fn tell(m : TumbleModel, x : TumbleMsg) : TumbleModel do
+    let (next, _) = Tumble.App.update(m, x)
+    next
+  end
+
+  fn booted(seed : Int) : TumbleModel do
+    let (m, _) = Tumble.App.boot(900.0, 700.0, seed_of(seed))
+    tell(m, TmTick(0.0))
+  end
+
+  -- The effects of every message of a list, in order, and the last model.
+  fn run(m : TumbleModel, xs : List(TumbleMsg), fx : List(TumbleFx)) : (TumbleModel, List(TumbleFx)) do
+    match xs do
+    Nil -> (m, fx)
+    Cons(x, rest) -> do
+      let (next, more) = Tumble.App.update(m, x)
+      run(next, rest, List.append(fx, more))
+    end
+    end
+  end
+
+  fn ticks(from : Float, every : Float, n : Int) : List(TumbleMsg) do
+    List.map(List.range(1, n + 1), fn i -> TmTick(from +. every *. int_to_float(i)))
+  end
+
+  fn cues(fx : List(TumbleFx)) : List(TumbleCue) do
+    List.flat_map(fx, fn e ->
+      match e do
+      FxAudio(cmds) -> do
+        List.filter_map(cmds, fn c ->
+          match c do
+          CmdPlay(cue) -> Some(cue)
+          _ -> None
+          end
+        )
+      end
+      _ -> []
+      end
+    )
+  end
+
+  fn cue_name(c : TumbleCue) : String do
+    match c do
+    CueReel(i) -> "reel" ++ int_to_string(i)
+    CueJackpot -> "jackpot"
+    CueGo -> "go"
+    CuePost -> "post"
+    CueRail -> "rail"
+    CueGem -> "gem"
+    CueEdge -> "edge"
+    CueClear(_) -> "clear"
+    CueLost -> "lost"
+    CueOver -> "over"
+    end
+  end
+
+  fn uploads(fx : List(TumbleFx)) : List(Int) do
+    List.flat_map(fx, fn e ->
+      match e do
+      FxMeshes(ms) -> List.map(ms, fn m -> m.id)
+      _ -> []
+      end
+    )
+  end
+
+  -- ---- The boot and the spin ----
+  fn case_boot() : Outcome do
+    let (m, fx) = Tumble.App.boot(900.0, 700.0, seed_of(2026))
+    let frame = Tumble.App.picture(m)
+    all([
+      expect_string(Tumble.App.show_name(m.show), "title", "the app opens on its title"),
+      expect_string(String.join(List.map(uploads(fx), int_to_string), ","), "2,3,4", "the ball, the gem and the shadow are uploaded at boot"),
+      expect_int(List.length(frame.items), 0, "before a spin the picture is the sky"),
+      expect_string(Tumble.Hud.headline(m.game), "TUMBLE", "the title's headline")
+    ])
+  end
+
+  fn case_spin_shows_the_reels() : Outcome do
+    let m = booted(2026)
+    let (spun, fx) = Tumble.App.update(m, TmKey(KeyGo, true))
+    let (played, more) = run(spun, ticks(0.0, 0.125, 20), [])
+    let frame = Tumble.App.picture(spun)
+    let again = tell(spun, TmKey(KeyGo, true))
+    all([
+      expect_string(Tumble.App.show_name(spun.show), "reels", "the go key spins"),
+      expect_string(String.join(List.map(uploads(fx), int_to_string), ","), "1", "the board's mesh is uploaded with the spin"),
+      expect(List.length(frame.items) >= 3, "the board, the ball and its shadow are in the picture"),
+      expect_string(String.join(List.map(cues(more), cue_name), ","), "reel0,reel1,reel2,go", "each reel sounds as it stops, then go"),
+      expect_string(Tumble.App.show_name(played.show), "play", "by 2.5 s after the spin the round is on"),
+      expect_int(again.rounds, 1, "the go key does nothing while the reels turn")
+    ])
+  end
+
+  -- ---- A round played through the app's own messages ----
+  -- Each frame the bot's tilt is put on the stick: a pointer pressed at
+  -- (300, 400) and dragged full_drag pixels for a full tilt, up the screen
+  -- for up the board. Then a sixtieth of a second passes.
+  fn bot_frame(m : TumbleModel, t : Float) : TumbleModel do
+    match Tumble.Rules.round_of(m.game) do
+    None -> tell(m, TmTick(t))
+    Some(r) -> do
+      let want =
+        Tumble.Roll.in_disc(Tumble.Bot.steer(Tumble.Bot.tuning(), Tumble.Rules.court(m.rs, r), r.run))
+      let at =
+        Arcade.Vec2.vec2(300.0 +. want.x *. Tumble.App.full_drag(), 400.0 -. want.y *. Tumble.App.full_drag())
+      tell(tell(m, TmMove(at)), TmTick(t))
+    end
+    end
+  end
+
+  fn bot_frames(m : TumbleModel, t : Float, left : Int) : (TumbleModel, Float) do
+    if left <= 0 do
+      (m, t)
+    else
+      match m.show do
+      ShowPlay(_) -> bot_frames(bot_frame(m, t +. 0.015625), t +. 0.015625, left - 1)
+      _ -> (m, t)
+      end
+    end
+  end
+
+  fn round_by_stick(seed : Int) : (TumbleModel, Float) do
+    let spun = tell(booted(seed), TmKey(KeyGo, true))
+    let (ready, _) = run(spun, ticks(0.0, 0.125, 20), [])
+    bot_frames(tell(ready, TmDown(Arcade.Vec2.vec2(300.0, 400.0))), 2.5, 6000)
+  end
+
+  fn pinned_round() : Int do
+    3365034894
+  end
+
+  fn case_a_round_by_stick() : Outcome do
+    let (m, t) = round_by_stick(2026)
+    let early = tell(m, TmUp(Arcade.Vec2.vec2(300.0, 400.0)))
+    let later = tell(tell(tell(m, TmTick(t +. 1.0)), TmDown(Arcade.Vec2.vec2(10.0, 10.0))), TmUp(Arcade.Vec2.vec2(10.0, 10.0)))
+    all([
+      expect_string(Tumble.App.phase_name(m.game.phase), "won", "the bot's tilt on the stick wins the round"),
+      expect_string(Tumble.App.show_name(m.show), "card", "and the card comes up"),
+      expect_string(Tumble.Hud.headline(m.game), "CLEAR!", "saying so"),
+      expect_int(m.game.level, 1, "the level went up"),
+      expect(m.game.score >= 100, "the round paid"),
+      expect_string(Tumble.App.show_name(early.show), "card", "a tap in the card's first 0.7 s is not a spin"),
+      expect_string(Tumble.App.show_name(later.show), "reels", "a tap after it spins the next"),
+      expect_int(later.rounds, 2, "the second round"),
+      expect_int(Tumble.Suite.Game.state_digest(Arcade.Test.Digest.start(), m.game), pinned_round(), "the game the stick played, native and JS")
+    ])
+  end
+
+  -- ---- Time ----
+  fn steps_of(m : TumbleModel) : Int do
+    match Tumble.Rules.round_of(m.game) do
+    Some(r) -> r.run.clock.step
+    None -> -1
+    end
+  end
+
+  fn case_time() : Outcome do
+    let spun = tell(booted(7), TmKey(KeyGo, true))
+    let (ready, _) = run(spun, ticks(0.0, 0.125, 20), [])
+    let one = tell(ready, TmTick(2.5 +. 0.015625))
+    let slow = tell(one, TmTick(2.5 +. 0.015625 +. 5.0))
+    let hidden = tell(tell(one, TmVisible(false)), TmTick(100.0))
+    let back = tell(hidden, TmTick(100.0 +. 0.015625))
+    all([
+      expect_int(steps_of(ready), 0, "no step is played while the reels turn"),
+      expect_int(steps_of(one), 2, "a sixtieth of a second is two steps of 1/128 s"),
+      expect_int(steps_of(slow) - steps_of(one), 12, "a frame five seconds late plays a tenth of a second (12 whole steps) and drops the rest"),
+      expect_int(steps_of(hidden), steps_of(one), "the first frame after the page was hidden plays nothing"),
+      expect_int(steps_of(back) - steps_of(hidden), 2, "and the next plays its own sixtieth")
+    ])
+  end
+
+  -- ---- Input ----
+  fn case_input() : Outcome do
+    let m = booted(3)
+    let keys = tell(tell(m, TmKey(KeyRight, true)), TmKey(KeyUp, true))
+    let k = Tumble.App.wanted(keys)
+    let freed = Tumble.App.wanted(tell(keys, TmKey(KeyRight, false)))
+    let dragged =
+      Tumble.App.wanted(tell(tell(m, TmDown(Arcade.Vec2.vec2(100.0, 100.0))), TmMove(Arcade.Vec2.vec2(135.0, 100.0))))
+    let far =
+      Tumble.App.wanted(tell(tell(m, TmDown(Arcade.Vec2.vec2(100.0, 100.0))), TmMove(Arcade.Vec2.vec2(100.0, 600.0))))
+    all([
+      near(k.x, 0.7071067811865475, 0.000000001, "right and up held is a full tilt on the diagonal, x"),
+      near(k.y, 0.7071067811865475, 0.000000001, "and y"),
+      expect(freed.x == 0.0 && freed.y == 1.0, "right released leaves up"),
+      expect(dragged.x == 0.5 && dragged.y == 0.0, "a 35 px drag right is half a tilt right"),
+      expect(far.x == 0.0 && far.y == -1.0, "a long drag down the screen is a full tilt down the board, no more"),
+      expect(Option.is_some(Tumble.App.key_of("KeyA")) && Option.is_some(Tumble.App.key_of("ArrowLeft")), "A and the left arrow are keys"),
+      expect(Option.is_none(Tumble.App.key_of("KeyQ")), "Q is not")
+    ])
+  end
+
+  -- ---- The overlay ----
+  fn first_call(ops : List(DrawOp)) : String do
+    match Arcade.Canvas.calls(Arcade.Numerics.make(), 2.0, 900.0, 700.0, ops) do
+    Cons(_, Cons(CvClearRect(x, y, w, h), _)) -> do
+      "clear " ++ Arcade.Draw.css_number(x) ++ " " ++ Arcade.Draw.css_number(y) ++ " " ++ Arcade.Draw.css_number(w) ++ " " ++ Arcade.Draw.css_number(h)
+    end
+    _ -> "something else"
+    end
+  end
+
+  fn reels_of(a : TumblePower, b : TumblePower, c : TumblePower) : TumbleSpin do
+    { first: a, second: b, third: c }
+  end
+
+  fn case_overlay() : Outcome do
+    let m = booted(2026)
+    let tm = Tumble.Hud.timing()
+    let r = reels_of(PowIce, PowQuake, PowRails)
+    all([
+      expect_string(first_call(Tumble.App.overlay(m)), "clear 0 0 900 700", "the overlay's frame opens by wiping the canvas clear, after the transform"),
+      expect_string(Tumble.Hud.clock_text(12.01), "13", "the clock rounds up"),
+      expect_string(Tumble.Hud.clock_text(0.0), "0", "and shows 0 only at 0"),
+      expect_int(Tumble.Hud.stopped(tm, 0.5), 0, "no reel has stopped at 0.5 s"),
+      expect_int(Tumble.Hud.stopped(tm, 1.2), 2, "two have at 1.2 s"),
+      expect_int(Tumble.Power.power_rank(Tumble.Hud.reel_face(tm, r, 0, 0.71)), 2, "a stopped reel shows its own power"),
+      expect_int(Tumble.Power.power_rank(Tumble.Hud.reel_face(tm, r, 2, 0.0)), 10, "a turning reel shows the strip going by: reel 2 starts ten powers on"),
+      expect_int(Tumble.Power.power_rank(Tumble.Hud.reel_face(tm, r, 2, 1.6)), 5, "until it stops")
+    ])
+  end
+
+  -- ---- Cel ----
+  fn distinct(xs : List(Float), seen : List(Float)) : List(Float) do
+    match xs do
+    Nil -> List.reverse(seen)
+    Cons(x, rest) -> if List.any(seen, fn y -> y == x) do distinct(rest, seen) else distinct(rest, Cons(x, seen)) end
+    end
+  end
+
+  fn case_tone_is_banded() : Outcome do
+    let look = Tumble.Scene.look()
+    let sweep =
+      List.map(List.range(0, 2001), fn i -> Tumble.Cel.tone(look, int_to_float(i) /. 1000.0 -. 1.0))
+    let seen = distinct(sweep, [])
+    let tones = Tumble.Cel.tones(look)
+    all([
+      expect_int(List.length(seen), 4, "2001 angles from facing away to facing the light give exactly four tones"),
+      expect_int(List.length(tones), 4, "and the look lists four"),
+      expect(Tumble.Cel.tone(look, -1.0) == 0.42, "the darkest is the look's dark"),
+      expect(Tumble.Cel.tone(look, 1.0) == 1.0, "the lightest is the colour itself"),
+      near(Tumble.Cel.tone(look, 0.1), 0.42 +. 0.58 *. 2.0 /. 3.0, 0.000000000001, "just past side-on is the third tone"),
+      expect(Tumble.Cel.tone(look, -0.01) < Tumble.Cel.tone(look, 0.01), "the tone steps at side-on"),
+      near(Arcade.Vec3.length(look.light), 1.0, 0.000000000001, "the light is a unit vector")
+    ])
+  end
+
+  -- ---- Meshes ----
+  type MeshCorner = { p : Arcade.Vec3.Vec3, n : Arcade.Vec3.Vec3, rim : Arcade.Vec3.Vec3 }
+
+  fn mesh_corners(fs : List(Float), acc : List(MeshCorner)) : List(MeshCorner) do
+    match fs do
+    Cons(px, Cons(py, Cons(pz, Cons(nx, Cons(ny, Cons(nz, Cons(_, Cons(_, Cons(_, Cons(rx, Cons(ry, Cons(rz, rest)))))))))))) -> do
+      mesh_corners(rest, Cons({ p: Arcade.Vec3.vec3(px, py, pz), n: Arcade.Vec3.vec3(nx, ny, nz), rim: Arcade.Vec3.vec3(rx, ry, rz) }, acc))
+    end
+    _ -> List.reverse(acc)
+    end
+  end
+
+  -- How many triangles of a mesh do not face away from `centre`: wound
+  -- clockwise seen from outside, or with a normal or a rim pointing in.
+  fn inward(cs : List(MeshCorner), centre : Arcade.Vec3.Vec3, bad : Int) : Int do
+    match cs do
+    Cons(a, Cons(b, Cons(c, rest))) -> do
+      let face = Tumble.Mesh.facing(a.p, b.p, c.p)
+      let mid = Arcade.Vec3.scale(Arcade.Vec3.add(Arcade.Vec3.add(a.p, b.p), c.p), 1.0 /. 3.0)
+      let out = Arcade.Vec3.sub(mid, centre)
+      let ok =
+        Arcade.Vec3.dot(face, out) > 0.0 && Arcade.Vec3.dot(a.n, face) > 0.0 && Arcade.Vec3.dot(a.rim, out) > 0.0 && Arcade.Vec3.dot(b.rim, out) > 0.0 && Arcade.Vec3.dot(c.rim, out) > 0.0
+      inward(rest, centre, if ok do bad else bad + 1 end)
+    end
+    _ -> bad
+    end
+  end
+
+  fn mesh_of(rev : List(Float)) : CelMesh do
+    Tumble.Mesh.done(9, rev)
+  end
+
+  fn case_meshes_face_out() : Outcome do
+    let white = Arcade.Draw.hex(16777215)
+    let ball = mesh_of(Tumble.Mesh.sphere([], 3, white, white))
+    let gem = mesh_of(Tumble.Mesh.gem([], 0.2, 0.3, white))
+    let lo = Arcade.Vec3.vec3(1.0, 2.0, -0.5)
+    let hi = Arcade.Vec3.vec3(2.0, 3.0, 0.0)
+    let box = mesh_of(Tumble.Mesh.box([], lo, hi, white, white, Tumble.Mesh.all_faces()))
+    let post = mesh_of(Tumble.Mesh.post([], Arcade.Vec3.vec3(4.0, 5.0, 0.0), 0.2, 0.55, white, white))
+    let disc = mesh_of(Tumble.Mesh.disc([], 1.0, white))
+    let o = Arcade.Vec3.zero()
+    all([
+      expect_int(Tumble.Cel.triangles(ball), 512, "a sphere split three times is 8 x 4^3 triangles"),
+      expect_int(inward(mesh_corners(ball.floats, []), o, 0), 0, "every one faces out"),
+      expect_int(Tumble.Cel.triangles(gem), 8, "a gem has eight faces"),
+      expect_int(inward(mesh_corners(gem.floats, []), o, 0), 0, "facing out"),
+      expect_int(Tumble.Cel.triangles(box), 12, "a box is twelve triangles"),
+      expect_int(inward(mesh_corners(box.floats, []), Arcade.Vec3.vec3(1.5, 2.5, -0.25), 0), 0, "facing out"),
+      expect_int(Tumble.Cel.triangles(post), 48, "a post is sixteen sides of two and sixteen slices of cap"),
+      expect_int(inward(mesh_corners(post.floats, []), Arcade.Vec3.vec3(4.0, 5.0, 0.2), 0), 0, "facing out"),
+      expect_int(Tumble.Cel.triangles(disc), 16, "a disc is sixteen slices"),
+      expect_int(inward(mesh_corners(disc.floats, []), Arcade.Vec3.vec3(0.0, 0.0, -1.0), 0), 0, "facing up")
+    ])
+  end
+
+  fn case_board_mesh() : Outcome do
+    let rs = Tumble.Rules.rules()
+    let b = Tumble.Gen.runway()
+    let mesh = Tumble.Scene.board_mesh(Tumble.Scene.sight(), rs.tune, b, false)
+    let (hard, _) = Tumble.Gen.board(rs.num, 8, Arcade.Rng.seed(seed_of(5)))
+    let big = Tumble.Scene.board_mesh(Tumble.Scene.sight(), rs.tune, hard, false)
+    all([
+      expect_int(List.length(mesh.floats) % 36, 0, "whole triangles"),
+      expect_int(Tumble.Cel.triangles(mesh), 45 * 4 + 28 * 2 + 36, "the runway: 45 tiles' tops and bottoms, 28 edge faces, the arch's three boxes"),
+      expect(Tumble.Cel.triangles(big) < 2500, "the hardest board is under 2500 triangles: " ++ int_to_string(Tumble.Cel.triangles(big)))
+    ])
+  end
+
+  -- ---- Matrices ----
+  fn case_matrices() : Outcome do
+    let st = Tumble.Scene.sight()
+    let axis = Arcade.Vec3.normalized(Arcade.Vec3.vec3(1.0, 2.0, 3.0))
+    let turn = Tumble.Mat4.turn(axis, 0.3)
+    let x = Tumble.Mat4.point(turn, Arcade.Vec3.vec3(1.0, 0.0, 0.0))
+    let y = Tumble.Mat4.point(turn, Arcade.Vec3.vec3(0.0, 1.0, 0.0))
+    let kept = Tumble.Mat4.point(turn, axis)
+    let n = Arcade.Vec3.normalized(Arcade.Vec3.vec3(0.1, -0.15, 1.0))
+    let stood = Tumble.Mat4.point(Tumble.Mat4.stand_on(n), Arcade.Vec3.vec3(0.0, 0.0, 1.0))
+    let pivot = Arcade.Vec3.vec3(3.0, 4.0, 0.0)
+    let fixed = Tumble.Mat4.point(Tumble.Mat4.about(pivot, Tumble.Mat4.stand_on(n)), pivot)
+    let at = Arcade.Vec2.vec2(3.5, 6.0)
+    let vp = Tumble.Scene.view_proj(st, at, 1.5)
+    let cam = Tumble.Scene.pose(st, at, 1.5)
+    let ball =
+      { at: Arcade.Vec2.vec2(2.0, 2.0), vel: Arcade.Vec2.zero(), z: 0.0, vz: 0.0, tilt: Arcade.Vec2.vec2(1.0, 0.0) }
+    let w = Tumble.Scene.world(st, ball)
+    let downhill = Tumble.Mat4.point(w, Arcade.Vec3.vec3(3.0, 2.0, 0.0))
+    let uphill = Tumble.Mat4.point(w, Arcade.Vec3.vec3(1.0, 2.0, 0.0))
+    all([
+      near(Arcade.Vec3.length(x), 1.0, 0.000000000001, "a turn keeps lengths"),
+      near(Arcade.Vec3.dot(x, y), 0.0, 0.000000000001, "and right angles"),
+      near(Arcade.Vec3.length(Arcade.Vec3.sub(kept, axis)), 0.0, 0.000000000001, "and its own axis"),
+      near(Arcade.Vec3.length(Arcade.Vec3.sub(stood, n)), 0.0, 0.000000000001, "stand_on takes z to the normal"),
+      near(Arcade.Vec3.length(Arcade.Vec3.sub(fixed, pivot)), 0.0, 0.000000000001, "a turn about a point leaves the point"),
+      match Tumble.Mat4.project(vp, cam.target) do
+      Some(c) -> all([near(c.x, 0.0, 0.000000000001, "what the camera looks at is at the middle of the screen, x"), near(c.y, 0.0, 0.000000000001, "and y")])
+      None -> Mismatch("the camera's target is behind it")
+      end,
+      expect(Option.is_none(Tumble.Mat4.project(vp, Arcade.Vec3.add(cam.eye, Arcade.Vec3.vec3(0.0, -1.0, 1.0)))), "a point behind the camera does not project"),
+      expect(downhill.z < 0.0 && uphill.z > 0.0, "tilted right, the floor to the right of the ball is lower and to the left higher"),
+      near(downhill.z, -0.196116135138, 0.000000001, "by the lean: 0.2 a metre, on the slope"),
+      expect_int(List.length(Tumble.Cel.frame_floats(Tumble.Scene.empty(st, 1.5))), 30, "a frame is thirty floats"),
+      expect_int(List.length(Tumble.Cel.item_floats(Tumble.Cel.item(1, w, 0.03))), 22, "an item is twenty-two")
+    ])
+  end
+
+  fn cases() : List(Case) do
+    [
+      case("boot", fn () -> case_boot()),
+      case("a spin shows the reels, then the round", fn () -> case_spin_shows_the_reels()),
+      case("a round played by stick", fn () -> case_a_round_by_stick()),
+      case("frames and time", fn () -> case_time()),
+      case("keys and the stick", fn () -> case_input()),
+      case("the overlay", fn () -> case_overlay()),
+      case("the tone is banded", fn () -> case_tone_is_banded()),
+      case("meshes face out", fn () -> case_meshes_face_out()),
+      case("the board's mesh", fn () -> case_board_mesh()),
+      case("matrices", fn () -> case_matrices())
+    ]
+  end
+
+end

@@ -1,0 +1,283 @@
+mod Tumble.Hud do
+
+  -- Everything drawn flat over the 3D picture, as Arcade.Draw ops in CSS
+  -- pixels: the top band (level, lives, the clock, the score), the round's
+  -- three powers, the slot machine while it spins, and the cards between
+  -- rounds. The canvas it is painted on lies over the 3D one, so a frame
+  -- starts by wiping to clear, not by filling. Text is only ever centred on
+  -- a point, so every line is short.
+  cap pure
+
+  import Arcade.Draw
+  import Arcade.Vec2
+
+  -- What the app is showing, and for how long it has (seconds).
+  --   HudTitle     before the first spin
+  --   HudReels     the reels turning; the float is seconds since the spin
+  --   HudPlay      the round
+  --   HudCard      a round or the game just ended; seconds since
+  --   HudJam       a spin was refused
+  type HudMoment = HudTitle | HudReels(Float) | HudPlay(Float) | HudCard(Float) | HudJam
+
+  -- When each reel stops and the round starts, in seconds from the spin.
+  type HudTiming = { stops : List(Float), go : Float, card_wait : Float }
+
+  fn timing() : HudTiming needs () do
+    { stops: [0.7, 1.15, 1.6], go: 2.4, card_wait: 0.7 }
+  end
+
+  doc """The colour a power is shown in."""
+  fn colour(p : TumblePower) : Rgba needs () do
+    match p do
+    PowTurbo -> hex(16743001)
+    PowSyrup -> hex(13208124)
+    PowIce -> hex(9428210)
+    PowBumper -> hex(14964526)
+    PowMagnet -> hex(14048689)
+    PowRails -> hex(9163132)
+    PowMirror -> hex(12105937)
+    PowQuake -> hex(10514506)
+    PowGust -> hex(8370110)
+    PowClock -> hex(16765503)
+    PowTiny -> hex(16164607)
+    PowGiant -> hex(10194175)
+    end
+  end
+
+  pfn identity() : Affine needs () do
+    { a: 1.0, b: 0.0, c: 0.0, d: 1.0, e: 0.0, f: 0.0 }
+  end
+
+  pfn words(text : String, size : Int, at : Vec2, ink : Rgba) : DrawOp needs () do
+    DrawText({
+      words: text,
+      font: "bold " ++ int_to_string(size) ++ "px ui-rounded, system-ui, sans-serif",
+      middle: at,
+      fill: ink,
+      edge: Some({ ink: hex(1709091), width: 4.0, ends: RoundEnd, corners: RoundCorner }),
+      frame: identity()
+    })
+  end
+
+  pfn plate(x : Float, y : Float, w : Float, h : Float, r : Float) : Shape needs () do
+    Outline([
+      MoveTo(vec2(x +. r, y)),
+      LineTo(vec2(x +. w -. r, y)),
+      QuadTo(vec2(x +. w, y), vec2(x +. w, y +. r)),
+      LineTo(vec2(x +. w, y +. h -. r)),
+      QuadTo(vec2(x +. w, y +. h), vec2(x +. w -. r, y +. h)),
+      LineTo(vec2(x +. r, y +. h)),
+      QuadTo(vec2(x, y +. h), vec2(x, y +. h -. r)),
+      LineTo(vec2(x, y +. r)),
+      QuadTo(vec2(x, y), vec2(x +. r, y)),
+      ClosePath
+    ])
+  end
+
+  pfn pen(ink : Rgba, width : Float) : Pen needs () do
+    { ink: ink, width: width, ends: RoundEnd, corners: RoundCorner }
+  end
+
+  pfn card(x : Float, y : Float, w : Float, h : Float, fill : Rgba) : List(DrawOp) needs () do
+    [
+      FillShape(plate(x, y, w, h, 12.0), Flat(fill), Over),
+      StrokeShape(plate(x, y, w, h, 12.0), pen(hex(1709091), 4.0), Over)
+    ]
+  end
+
+  -- ---- The top band ----
+  doc """Seconds as the clock shows them: whole seconds, rounded up, so 0 is only shown when time is out."""
+  fn clock_text(left : Float) : String needs () do
+    int_to_string(float_ceil(left))
+  end
+
+  pfn hearts(n : Int, x : Float, y : Float) : List(DrawOp) needs () do
+    if n <= 0 do
+      []
+    else
+      Cons(FillShape(Disc(vec2(x, y), 7.0), Flat(hex(16735603)), Over), Cons(StrokeShape(Disc(vec2(x, y), 7.0), pen(hex(1709091), 3.0), Over), hearts(n - 1, x +. 20.0, y)))
+    end
+  end
+
+  doc """The band along the top: level and lives on the left, the clock in the middle (red under five seconds), the score on the right."""
+  fn band(vp : Arcade.Camera.Viewport, s : TumbleState, left : Option(Float)) : List(DrawOp) needs () do
+    let mid = vp.width /. 2.0
+    let clock =
+      match left do
+      None -> []
+      Some(t) -> [words(clock_text(t), 40, vec2(mid, 38.0), if t <= 5.0 do hex(16735603) else hex(16774368) end)]
+      end
+    List.concat([[words("LEVEL " ++ int_to_string(s.level + 1), 16, vec2(58.0, 26.0), hex(16774368))], hearts(s.lives, 22.0, 52.0), clock, [words(int_to_string(s.score), 22, vec2(vp.width -. 54.0, 30.0), hex(16765503))]])
+  end
+
+  -- ---- Powers ----
+  pfn plain_words(text : String, size : Int, at : Vec2, ink : Rgba) : DrawOp needs () do
+    DrawText({
+      words: text,
+      font: "bold " ++ int_to_string(size) ++ "px ui-rounded, system-ui, sans-serif",
+      middle: at,
+      fill: ink,
+      edge: None,
+      frame: identity()
+    })
+  end
+
+  pfn chip_plain(p : TumblePower, x : Float, y : Float, w : Float) : List(DrawOp) needs () do
+    List.append(card(x, y, w, 30.0, colour(p)), [plain_words(Tumble.Power.name(p), 13, vec2(x +. w /. 2.0, y +. 15.0), hex(1709091))])
+  end
+
+  doc """The round's three powers as chips in a row under the top band."""
+  fn chips(vp : Arcade.Camera.Viewport, reels : TumbleSpin) : List(DrawOp) needs () do
+    let w = 84.0
+    let x = vp.width /. 2.0 -. 1.5 *. w -. 6.0
+    List.concat([chip_plain(reels.first, x, 70.0, w), chip_plain(reels.second, x +. w +. 6.0, 70.0, w), chip_plain(reels.third, x +. 2.0 *. (w +. 6.0), 70.0, w)])
+  end
+
+  -- ---- The slot machine ----
+  doc """
+  What reel i (0, 1, 2) shows `since` seconds after the spin: its own power
+  once it has stopped, and before that the powers in turn, twelve a second,
+  each reel starting from a different one.
+  """
+  fn reel_face(tm : HudTiming, reels : TumbleSpin, i : Int, since : Float) : TumblePower needs () do
+    let stop =
+      match List.nth_opt(tm.stops, i) do
+      Some(t) -> t
+      None -> 0.0
+      end
+    let own =
+      match List.nth_opt(Tumble.Power.powers(reels), i) do
+      Some(p) -> p
+      None -> reels.first
+      end
+    if since >= stop do
+      own
+    else
+      do
+        let every = Tumble.Power.every()
+        let k = (float_floor(since *. 12.0) + i * 5) % List.length(every)
+        match List.nth_opt(every, k) do
+        Some(p) -> p
+        None -> own
+        end
+      end
+    end
+  end
+
+  doc """How many reels have stopped `since` seconds after the spin."""
+  fn stopped(tm : HudTiming, since : Float) : Int needs () do
+    List.length(List.filter(tm.stops, fn t -> since >= t))
+  end
+
+  pfn window(tm : HudTiming, reels : TumbleSpin, i : Int, since : Float, x : Float, y : Float, w : Float, h : Float) : List(DrawOp) needs () do
+    let p = reel_face(tm, reels, i, since)
+    let still = stopped(tm, since) > i
+    let face = if still do colour(p) else mix(colour(p), hex(16774368), 0.55) end
+    List.append(card(x, y, w, h, face), [plain_words(Tumble.Power.name(p), 15, vec2(x +. w /. 2.0, y +. h /. 2.0), hex(1709091))])
+  end
+
+  pfn blurbs(reels : TumbleSpin, mid : Float, y : Float) : List(DrawOp) needs () do
+    [
+      words(Tumble.Power.blurb(reels.first), 14, vec2(mid, y), colour(reels.first)),
+      words(Tumble.Power.blurb(reels.second), 14, vec2(mid, y +. 22.0), colour(reels.second)),
+      words(Tumble.Power.blurb(reels.third), 14, vec2(mid, y +. 44.0), colour(reels.third))
+    ]
+  end
+
+  doc """
+  The machine: a cabinet in the middle of the screen with three windows.
+  Once all three reels have stopped, what each power does is written under
+  it, with JACKPOT over it when they match.
+  """
+  fn machine(tm : HudTiming, vp : Arcade.Camera.Viewport, reels : TumbleSpin, since : Float) : List(DrawOp) needs () do
+    let w = Arcade.Num.min_float(340.0, vp.width -. 24.0)
+    let x = (vp.width -. w) /. 2.0
+    let y = vp.height *. 0.3
+    let cell = (w -. 40.0) /. 3.0
+    let mid = vp.width /. 2.0
+    let all = stopped(tm, since) >= 3
+    let told = if all do blurbs(reels, mid, y +. 150.0) else [] end
+    let jack =
+      if all && Tumble.Power.jackpot(reels) do
+        [words("JACKPOT  x3", 30, vec2(mid, y -. 34.0), hex(16765503))]
+      else
+        []
+      end
+    List.concat([card(x, y, w, 120.0, hex(3878748)), [plain_words("TUMBLE", 14, vec2(mid, y +. 16.0), hex(16765503))], window(tm, reels, 0, since, x +. 10.0, y +. 34.0, cell, 72.0), window(tm, reels, 1, since, x +. 20.0 +. cell, y +. 34.0, cell, 72.0), window(tm, reels, 2, since, x +. 30.0 +. 2.0 *. cell, y +. 34.0, cell, 72.0), told, jack])
+  end
+
+  -- ---- Cards between rounds ----
+  doc """The headline of the card a phase shows, or "" for none."""
+  fn headline(s : TumbleState) : String needs () do
+    match s.phase do
+    TumbleIdle -> "TUMBLE"
+    TumbleLive(_) -> ""
+    TumbleWon(r, _) -> if r.mods.payout > 1 do "JACKPOT!" else "CLEAR!" end
+    TumbleLost(_, LostFell) -> "FELL!"
+    TumbleLost(_, LostTime) -> "TIME!"
+    TumbleOver(_, _) -> "GAME OVER"
+    end
+  end
+
+  doc """The line under the headline."""
+  fn subline(s : TumbleState) : String needs () do
+    match s.phase do
+    TumbleIdle -> "tilt the floor, reach the gate"
+    TumbleLive(_) -> ""
+    TumbleWon(_, paid) -> "+" ++ int_to_string(paid)
+    TumbleLost(_, _) -> int_to_string(s.lives) ++ (if s.lives == 1 do " life left" else " lives left" end)
+    TumbleOver(_, _) -> "score " ++ int_to_string(s.score) ++ "   level " ++ int_to_string(s.level + 1)
+    end
+  end
+
+  doc """What a tap does now."""
+  fn prompt(s : TumbleState) : String needs () do
+    match s.phase do
+    TumbleIdle -> "tap or press space to spin"
+    TumbleLive(_) -> ""
+    TumbleWon(_, _) -> "tap to spin the next"
+    TumbleLost(_, _) -> "tap to spin again"
+    TumbleOver(_, _) -> "tap for a new game"
+    end
+  end
+
+  pfn cards(vp : Arcade.Camera.Viewport, s : TumbleState, ready : Bool) : List(DrawOp) needs () do
+    let mid = vp.width /. 2.0
+    let y = vp.height *. 0.36
+    let ask = if ready do [words(prompt(s), 15, vec2(mid, y +. 92.0), hex(16774368))] else [] end
+    List.append([words(headline(s), 44, vec2(mid, y), hex(16765503)), words(subline(s), 20, vec2(mid, y +. 48.0), hex(16774368))], ask)
+  end
+
+  pfn round_chips(vp : Arcade.Camera.Viewport, s : TumbleState) : List(DrawOp) needs () do
+    match Tumble.Rules.round_of(s) do
+    Some(r) -> chips(vp, r.reels)
+    None -> []
+    end
+  end
+
+  doc """
+  One frame of the overlay. `left` is the round's seconds left, when there
+  is a round. In the first second of play the word GO is shown; the last
+  five seconds turn the clock red.
+  """
+  fn frame(tm : HudTiming, vp : Arcade.Camera.Viewport, s : TumbleState, at : HudMoment, left : Option(Float)) : List(DrawOp) needs () do
+    let mid = vp.width /. 2.0
+    let body =
+      match at do
+      HudTitle -> cards(vp, s, true)
+      HudJam -> [words("THE REELS JAMMED", 26, vec2(mid, vp.height *. 0.4), hex(16735603)), words("tap to try again", 15, vec2(mid, vp.height *. 0.4 +. 40.0), hex(16774368))]
+      HudReels(since) -> do
+        match Tumble.Rules.round_of(s) do
+        Some(r) -> machine(tm, vp, r.reels, since)
+        None -> []
+        end
+      end
+      HudPlay(since) -> do
+        List.append(round_chips(vp, s), if since < 0.8 do [words("GO!", 56, vec2(mid, vp.height *. 0.36), hex(16765503))] else [] end)
+      end
+      HudCard(since) -> List.append(round_chips(vp, s), cards(vp, s, since >= tm.card_wait))
+      end
+    Cons(Wipe, List.append(band(vp, s, left), body))
+  end
+
+end

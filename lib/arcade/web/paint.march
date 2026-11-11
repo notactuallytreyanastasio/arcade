@@ -39,6 +39,7 @@ mod Arcade.Web.Paint do
     CvFill(r) -> Arcade.Web.Canvas2d.fill_rule(ctx, evenodd(r))
     CvClip(r) -> Arcade.Web.Canvas2d.clip_rule(ctx, evenodd(r))
     CvFillRect(x, y, w, h) -> Js.Canvas.fill_rect(ctx, x, y, w, h)
+    CvClearRect(x, y, w, h) -> Js.Canvas.clear_rect(ctx, x, y, w, h)
     CvStrokeStyle(css) -> Js.Canvas.set_stroke_style(ctx, css)
     CvLineWidth(w) -> Js.Canvas.set_line_width(ctx, w)
     CvLineCap(cap) -> Arcade.Web.Canvas2d.line_cap(ctx, cap)
