@@ -1,0 +1,167 @@
+mod Putt.Aim do
+
+  -- Aiming: a pull on screen as a putt, and what that putt would do before
+  -- it is struck. The player presses anywhere, drags away from where the
+  -- ball should go and lets go; the putt runs opposite the pull with a power
+  -- linear in its length. A pull shorter than the dead zone is no putt, which
+  -- is how a player backs out. The preview is the rules' own roll in still
+  -- air, cut where the ball first bounces: it shows the line and the
+  -- distance, and leaves the wind and the bank to the player.
+  cap pure
+
+  import Arcade.Vec2
+
+  -- CSS pixels of pull: under `dead` nothing happens, at `full` and beyond
+  -- the putt is the strongest. A preview dot every `dot_every` path samples.
+  type AimTuning = { dead : Float, full : Float, dot_every : Int }
+
+  -- A putt as the player sees it before letting go: the dots along its first
+  -- leg (course points, the ball's own place left out), where the leg ends,
+  -- its length in metres, and whether it ends in the cup or at a bounce.
+  type AimPreview = {
+    shot : PuttShot,
+    dots : List(Vec2),
+    ends : Vec2,
+    reach : Float,
+    holes : Bool,
+    bounces : Bool
+  }
+
+  doc """
+  A thumb's reach: 12 px of slack before a pull counts, the strongest putt
+  at 160 px. A dot every 3 path samples is one every 3/32 s of roll.
+  """
+  fn tuning() : AimTuning needs () do
+    { dead: 12.0, full: 160.0, dot_every: 3 }
+  end
+
+  doc """
+  How hard a pull of this many pixels is, 0 to 1: 0 through the dead zone,
+  then linear to 1 at the full pull.
+  """
+  fn strength(a : AimTuning, pulled : Float) : Float needs () do
+    Arcade.Num.clamp((pulled -. a.dead) /. (a.full -. a.dead), 0.0, 1.0)
+  end
+
+  doc """The power in m/s of a pull of this strength: min_power at 0, max_power at 1."""
+  fn power_of(rs : PuttRules, strength : Float) : Float needs () do
+    rs.tune.min_power +. strength *. (rs.tune.max_power -. rs.tune.min_power)
+  end
+
+  doc """
+  A pull on screen (from the press to the pointer, CSS pixels, y down) as a
+  putt: aimed opposite the pull, screen y flipped to course y. None inside
+  the dead zone.
+  """
+  fn shot_of_pull(rs : PuttRules, a : AimTuning, pull : Vec2) : Option(PuttShot) needs () do
+    let pulled = length(pull)
+    if pulled > a.dead do
+      Some({ aim: scale(vec2(-pull.x, pull.y), 1.0 /. pulled), power: power_of(rs, strength(a, pulled)) })
+    else
+      None
+    end
+  end
+
+  doc """
+  The pull that gives a putt of this power along this course direction: the
+  inverse of shot_of_pull, for a bot or a test. The aim must have a length.
+  """
+  fn pull_of_shot(rs : PuttRules, a : AimTuning, shot : PuttShot) : Vec2 needs () do
+    let s =
+      Arcade.Num.clamp((shot.power -. rs.tune.min_power) /. (rs.tune.max_power -. rs.tune.min_power), 0.0, 1.0)
+    let pulled = a.dead +. s *. (a.full -. a.dead)
+    let dir = normalized(shot.aim)
+    vec2(-dir.x *. pulled, dir.y *. pulled)
+  end
+
+  -- When the first leg ends: the first wall or block the ball bounces off.
+  -- Sand and the cup's lip do not end it (the dots show the ball slowing or
+  -- running on), and a drop ends the path by itself. Every kind is named: a
+  -- new one must say what the preview does there.
+  pfn first_bounce(met : List(Timed(PuttBump))) : Option(Float) needs () do
+    match met do
+    Nil -> None
+    Cons(m, rest) -> do
+      match m.ev do
+      BumpWall -> Some(m.at)
+      BumpBlock -> Some(m.at)
+      BumpSand -> first_bounce(rest)
+      BumpLip -> first_bounce(rest)
+      BumpCup -> first_bounce(rest)
+      end
+    end
+    end
+  end
+
+  -- The path's points up to `until`, oldest first.
+  pfn leg(path : List(Sampled(Vec2)), until : Float, acc : List(Vec2)) : List(Vec2) needs () do
+    match path do
+    Nil -> List.reverse(acc)
+    Cons(p, rest) -> do
+      if p.sampled_at <= until do
+        leg(rest, until, Cons(p.point, acc))
+      else
+        List.reverse(acc)
+      end
+    end
+    end
+  end
+
+  pfn run(from : Vec2, ps : List(Vec2), acc : Float) : Float needs () do
+    match ps do
+    Nil -> acc
+    Cons(p, rest) -> run(p, rest, acc +. length(sub(p, from)))
+    end
+  end
+
+  pfn last_point(from : Vec2, ps : List(Vec2)) : Vec2 needs () do
+    match ps do
+    Nil -> from
+    Cons(p, rest) -> last_point(p, rest)
+    end
+  end
+
+  -- Every `every`-th point, the last one left to the end marker.
+  pfn thinned(ps : List(Vec2), every : Int, i : Int, acc : List(Vec2)) : List(Vec2) needs () do
+    match ps do
+    Nil -> List.reverse(acc)
+    Cons(_, Nil) -> List.reverse(acc)
+    Cons(p, rest) -> do
+      if i % every == 0 do
+        thinned(rest, every, i + 1, Cons(p, acc))
+      else
+        thinned(rest, every, i + 1, acc)
+      end
+    end
+    end
+  end
+
+  doc """
+  What this putt would do from `ball` on hole `h` in still air: the rules'
+  roll with no wind, kept up to its first bounce off a wall or block.
+  """
+  fn preview(rs : PuttRules, a : AimTuning, h : PuttHole, ball : Vec2, shot : PuttShot) : AimPreview needs () do
+    let end_ =
+      Putt.Roll.roll(rs.tune, h, zero(), ball, scale(normalized(shot.aim), shot.power))
+    let cut = first_bounce(end_.met)
+    let until =
+      match cut do
+      Some(t) -> t
+      None -> end_.took
+      end
+    let points =
+      match leg(end_.path, until, []) do
+      Nil -> []
+      Cons(_, after_ball) -> after_ball
+      end
+    {
+      shot: shot,
+      dots: thinned(points, a.dot_every, 1, []),
+      ends: last_point(ball, points),
+      reach: run(ball, points, 0.0),
+      holes: end_.holed && Option.is_none(cut),
+      bounces: Option.is_some(cut)
+    }
+  end
+
+end
