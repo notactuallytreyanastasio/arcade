@@ -2,10 +2,11 @@ mod Putt.Roll do
 
   -- One putt rolled out: a fixed-step simulation (Arcade.Physics.Sim) of a
   -- ball on the green. Each step: friction against the direction of travel
-  -- (more in sand) and the hole's wind as a steady pull
-  -- (Kinematics.integrate_friction); then the outer walls
+  -- (more in sand) and, as a steady pull, the hole's wind plus the slope the
+  -- ball is on (Kinematics.integrate_friction); then the outer walls
   -- (Kinematics.clamp_to_bound, per axis) and the blocks (pushed out of the
-  -- block and reflected, Kinematics.reflect_approaching); then the cup, which
+  -- block and reflected, Kinematics.reflect_approaching); then water, which
+  -- ends the roll with the ball back where it was struck; then the cup, which
   -- takes a ball over it moving slowly enough and lets a fast one lip out.
   -- The ball rests once friction would turn it round or its speed falls
   -- under a floor. Only + - * / and sqrt: every target rounds them the same,
@@ -36,8 +37,9 @@ mod Putt.Roll do
   }
 
   -- What a roll can meet. Each is reported when it happens: a wall or block
-  -- on every bounce, sand and the cup's lip on entering them.
-  type PuttBump = BumpWall | BumpBlock | BumpSand | BumpLip | BumpCup
+  -- on every bounce, sand and the cup's lip on entering them, water as the
+  -- ball goes in (the roll's last).
+  type PuttBump = BumpWall | BumpBlock | BumpSand | BumpLip | BumpCup | BumpWater
 
   -- The roll in flight.
   type PuttRoll = {
@@ -50,9 +52,10 @@ mod Putt.Roll do
     trail : List(Sampled(Vec2))
   }
 
-  -- How a roll ended: where the ball rests (the cup's centre once holed), how
-  -- long it rolled, what it met (oldest first) and its path, sampled every
-  -- `trail_every` steps and at the end.
+  -- How a roll ended: where the ball rests (the cup's centre once holed, the
+  -- point it was struck from after water), how long it rolled, what it met
+  -- (oldest first) and its path, sampled every `trail_every` steps and at the
+  -- end. After water the path ends in the water, not at `rest`.
   type PuttRollEnd = {
     rest : Vec2,
     holed : Bool,
@@ -61,8 +64,14 @@ mod Putt.Roll do
     path : List(Sampled(Vec2))
   }
 
-  -- What every step reads: the tuning, the hole and its wind.
-  type PuttCourt = { tune : PuttTuning, hole : PuttHole, wind : Vec2 }
+  -- What every step reads: the tuning, the hole, its wind and where the ball
+  -- was struck from.
+  type PuttCourt = {
+    tune : PuttTuning,
+    hole : PuttHole,
+    wind : Vec2,
+    struck_from : Vec2
+  }
 
   doc """
   The game's numbers. dt is 1/256 s, a power of two, so the clock is exact.
@@ -92,7 +101,7 @@ mod Putt.Roll do
 
   doc """A ball struck from `from` with velocity `v`, rolled out on the hole."""
   fn roll(tune : PuttTuning, hole : PuttHole, wind : Vec2, from : Vec2, v : Vec2) : PuttRollEnd needs () do
-    let court = { tune: tune, hole: hole, wind: wind }
+    let court = { tune: tune, hole: hole, wind: wind, struck_from: from }
     let start =
       {
         clock: Arcade.Physics.Sim.clock(),
@@ -131,6 +140,16 @@ mod Putt.Roll do
     }
   end
 
+  pfn drowned(s : PuttRoll, back : Vec2, at : Vec2, t : Float) : PuttRollEnd needs () do
+    {
+      rest: back,
+      holed: false,
+      took: t,
+      met: chronological(emit(s.bumps, t, BumpWater)),
+      path: chronological(Arcade.Physics.Sim.sample(s.trail, t, at))
+    }
+  end
+
   pfn emit_if(events : List(Timed(PuttBump)), happened : Bool, at : Float, what : PuttBump) : List(Timed(PuttBump)) needs () do
     if happened do emit(events, at, what) else events end
   end
@@ -140,8 +159,9 @@ mod Putt.Roll do
     let tune = c.tune
     let t = tick(s.clock, tune.dt)
     let drag = if s.in_sand do tune.sand_drag else tune.green_drag end
+    let pull = add(c.wind, Putt.Course.pull_at(c.hole.slopes, s.at))
     let (p1, v1) =
-      Arcade.Physics.Kinematics.integrate_friction(s.at, s.vel, c.wind, drag, tune.dt)
+      Arcade.Physics.Kinematics.integrate_friction(s.at, s.vel, pull, drag, tune.dt)
     if length(v1) < tune.rest_speed || dot(v1, s.vel) <= 0.0 do
       TurnStop({ s with clock: t, vel: zero() })
     else
@@ -158,6 +178,15 @@ mod Putt.Roll do
     let e1 = emit_if(s.bumps, walled, t.t, BumpWall)
     let e2 = emit_if(e1, blocked, t.t, BumpBlock)
     let e3 = emit_if(e2, sandy && !s.in_sand, t.t, BumpSand)
+    if Putt.Course.inside_any(c.hole.waters, p3) do
+      TurnDone(drowned({ s with bumps: e3 }, c.struck_from, p3, t.t))
+    else
+      landed(c, s, t, p3, v3, sandy, over, e3)
+    end
+  end
+
+  pfn landed(c : PuttCourt, s : PuttRoll, t : SimClock, p3 : Vec2, v3 : Vec2, sandy : Bool, over : Bool, e3 : List(Timed(PuttBump))) : Turn(PuttRoll, PuttRollEnd) needs () do
+    let tune = c.tune
     if over && length(v3) <= tune.capture_speed do
       TurnDone(dropped({ s with bumps: e3 }, c.hole.cup, t.t))
     else
