@@ -224,15 +224,22 @@ mod Putt.View do
 
   doc """
   One frame with the ball at `ball`: a point of a putt's path while the
-  shell plays it back, or the state's own ball. Back to front: the ground,
-  the green, slopes, sand, water, the cup, the blocks, the rail, the ball,
-  the wind and the caption.
+  shell plays it back, or the state's own ball. Back to front: the hole
+  (field_ops), the ball, the wind and the caption.
   """
   fn scene_with_ball(rs : PuttRules, s : PuttState, vp : Arcade.Camera.Viewport, ball : Arcade.Vec2.Vec2) : List(DrawOp) needs () do
     let h = Putt.Rules.current(s)
     let l = projection(rs, h, vp)
+    List.concat([field_ops(rs, l, h), ball_ops(rs, l, ball), wind_ops(rs, vp, s.wind), [caption_op(s, vp)]])
+  end
+
+  doc """
+  The hole without the ball, through any projection: the ground, the green,
+  slopes, sand, water, the cup, the blocks and the rail, back to front.
+  """
+  fn field_ops(rs : PuttRules, l : Arcade.Camera.Projection, h : PuttHole) : List(DrawOp) needs () do
     let green = ring(rs, l, Putt.Course.bounds(h))
-    List.concat([[ClearTo(hex(1780258)), FillShape(green, Flat(hex(4168522)), Over)], banks(rs, l, h.slopes), flat(rs, l, h.sands, hex(14862730)), pools(rs, l, h.waters), cup_ops(rs, l, h), walled(rs, l, h.blocks, hex(8014634), hex(5911832)), [StrokeShape(green, pen(hex(8014634), 6.0), Over)], ball_ops(rs, l, ball), wind_ops(rs, vp, s.wind), [caption_op(s, vp)]])
+    List.concat([[ClearTo(hex(1780258)), FillShape(green, Flat(hex(4168522)), Over)], banks(rs, l, h.slopes), flat(rs, l, h.sands, hex(14862730)), pools(rs, l, h.waters), cup_ops(rs, l, h), walled(rs, l, h.blocks, hex(8014634), hex(5911832)), [StrokeShape(green, pen(hex(8014634), 6.0), Over)]])
   end
 
 end

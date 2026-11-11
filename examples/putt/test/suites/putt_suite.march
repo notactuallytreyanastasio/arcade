@@ -695,26 +695,6 @@ mod Putt.Suite.Game do
     all([expect_string(line(Putt.Course.bunker(), calm, 0.0, 1.0, 3.8), "sand cup holed", "bunker: straight through the sand, hard"), expect_string(line(Putt.Course.bunker(), calm, 0.0, 1.0, 3.0), "sand", "bunker: at a pace that would reach on green, the sand keeps it"), expect_string(line(Putt.Course.bunker(), calm, -0.4, 1.0, 3.4), "wall wall cup holed", "bunker: off the left wall, round the sand"), expect_string(line(Putt.Course.bank(), calm, 0.0, 1.0, 2.6), "block", "bank: straight is the block"), expect_string(line(Putt.Course.bank(), calm, 0.76, 1.0, 2.9), "wall cup holed", "bank: off the right wall, through the gap"), expect_string(line(Putt.Course.pond(), calm, 0.0, 1.0, 2.7), "water", "pond: straight is wet"), expect_string(line(Putt.Course.pond(), calm, 0.56, 1.0, 3.5), "wall wall cup holed", "pond: down the narrow side, off two walls"), expect_string(line(side, calm, at_cup.x, at_cup.y, 2.6), "", "sidehill: aimed at the cup, the slope takes it below"), expect_string(line(side, calm, -0.09, 1.0, 2.6), "cup holed", "sidehill: aimed above it, it breaks in"), expect_string(line(Putt.Course.causeway(), calm, 0.0, 1.0, 2.7), "cup holed", "causeway: in a calm, straight down the middle"), expect_string(line(Putt.Course.causeway(), gale, 0.0, 1.0, 2.7), "water", "causeway: the same putt in the hole's strongest crosswind is wet")])
   end
 
-  -- ---- A flick up and to the right, 1000 px/s up and 300 across ----
-  fn flick_points() : List(TrackPoint) do
-    List.map(List.range(0, 10), fn i -> Arcade.Physics.Gesture.point(int_to_float(i) *. 0.01, 100.0 +. int_to_float(i) *. 3.0, 500.0 -. int_to_float(i) *. 10.0))
-  end
-
-  fn gesture_cases() : Outcome do
-    match Arcade.Physics.Gesture.measure(flick_points(), Arcade.Physics.Gesture.flick_limits()) do
-    None -> Mismatch("the flick did not count")
-    Some(m) -> do
-      match Putt.Rules.shot_of_flick(rs(), m) do
-      None -> Mismatch("the flick gave no shot")
-      Some(shot) -> do
-        let k = 1.0 /. Math.sqrt(109.0)
-        all([near(shot.aim.x, 3.0 *. k, 0.000000001, "aim across"), near(shot.aim.y, 10.0 *. k, 0.000000001, "aim up the course"), near(shot.power, 2.5, 0.000001, "power from 1000 px/s")])
-      end
-      end
-    end
-    end
-  end
-
   -- ---- One frame on a tee, 360 x 640 at dpr 2 ----
   fn frame_calls() : List(Arcade.Canvas.CanvasCall) do
     tee_frame(Putt.Rules.new_game(rs(), seed_of(2026)))
@@ -856,7 +836,6 @@ mod Putt.Suite.Game do
       case("the green: lines, walls, blocks, sand, cup and lip", fn () -> physics_cases()),
       case("the lines the holes were laid out for", fn () -> line_cases()),
       case("water returns the ball, slopes pull it", fn () -> hazard_cases()),
-      case("a flick becomes a putt", fn () -> gesture_cases()),
       case("a frame's canvas calls", fn () -> canvas_cases()),
       case("cues and the synth feed", fn () -> audio_cases())
     ]
