@@ -1,6 +1,6 @@
 mod Tumble.Scene do
 
-  -- Tumble in three dimensions, as a Tumble.Cel frame: the board as one
+  -- Tumble in three dimensions, as a Arcade.Cel frame: the board as one
   -- mesh (slabs, posts and the gate's arch), the ball, the gems and the
   -- ball's shadow, seen by a camera that stands behind the ball and looks up
   -- the board. The floor really tilts: the whole board is turned about the
@@ -118,7 +118,7 @@ mod Tumble.Scene do
             bottom: true,
             top: true
           }
-        Tumble.Mesh.box(rev, vec3(x, y, 0.0 -. st.thick), vec3(x +. 1.0, y +. 1.0, 0.0), top_colour(t, col, row, slick), Arcade.Draw.hex(9067076), faces)
+        Arcade.Mesh.box(rev, vec3(x, y, 0.0 -. st.thick), vec3(x +. 1.0, y +. 1.0, 0.0), top_colour(t, col, row, slick), Arcade.Draw.hex(9067076), faces)
       end
     end
   end
@@ -141,7 +141,7 @@ mod Tumble.Scene do
     match ps do
     Nil -> rev
     Cons(p, rest) -> do
-      posts(Tumble.Mesh.post(rev, vec3(p.x, p.y, 0.0), radius, st.post_height, Arcade.Draw.hex(14964526), Arcade.Draw.hex(16774368)), st, radius, rest)
+      posts(Arcade.Mesh.post(rev, vec3(p.x, p.y, 0.0), radius, st.post_height, Arcade.Draw.hex(14964526), Arcade.Draw.hex(16774368)), st, radius, rest)
     end
     end
   end
@@ -152,10 +152,10 @@ mod Tumble.Scene do
     let y = int_to_float(g.row) +. 0.5
     let red = Arcade.Draw.hex(14964526)
     let gold = Arcade.Draw.hex(16765503)
-    let left = Tumble.Mesh.box(rev, vec3(x, y -. 0.07, 0.0), vec3(x +. 0.14, y +. 0.07, 1.25), red, red, Tumble.Mesh.all_faces())
+    let left = Arcade.Mesh.box(rev, vec3(x, y -. 0.07, 0.0), vec3(x +. 0.14, y +. 0.07, 1.25), red, red, Arcade.Mesh.all_faces())
     let right =
-      Tumble.Mesh.box(left, vec3(x +. 0.86, y -. 0.07, 0.0), vec3(x +. 1.0, y +. 0.07, 1.25), red, red, Tumble.Mesh.all_faces())
-    Tumble.Mesh.box(right, vec3(x -. 0.08, y -. 0.09, 1.25), vec3(x +. 1.08, y +. 0.09, 1.5), gold, gold, Tumble.Mesh.all_faces())
+      Arcade.Mesh.box(left, vec3(x +. 0.86, y -. 0.07, 0.0), vec3(x +. 1.0, y +. 0.07, 1.25), red, red, Arcade.Mesh.all_faces())
+    Arcade.Mesh.box(right, vec3(x -. 0.08, y -. 0.09, 1.25), vec3(x +. 1.08, y +. 0.09, 1.5), gold, gold, Arcade.Mesh.all_faces())
   end
 
   doc """
@@ -165,15 +165,15 @@ mod Tumble.Scene do
   fn board_mesh(st : TumbleSight, tune : TumbleTuning, b : TumbleBoard, slick : Bool) : CelMesh needs () do
     let ground = slabs([], st, b, slick, b.tiles, 0)
     let posted = posts(ground, st, tune.post_radius, b.posts)
-    Tumble.Mesh.done(board_id(), arch(posted, Tumble.Board.gate_cell(b)))
+    Arcade.Mesh.done(board_id(), arch(posted, Tumble.Board.gate_cell(b)))
   end
 
   doc """The meshes that never change: the unit ball, a gem, the unit shadow."""
   fn fixed_meshes() : List(CelMesh) needs () do
     [
-      Tumble.Mesh.done(ball_id(), Tumble.Mesh.sphere([], 3, Arcade.Draw.hex(16743001), Arcade.Draw.hex(16774368))),
-      Tumble.Mesh.done(gem_id(), Tumble.Mesh.gem([], 0.2, 0.3, Arcade.Draw.hex(8319231))),
-      Tumble.Mesh.done(shade_id(), Tumble.Mesh.disc([], 1.0, Arcade.Draw.hex(16777215)))
+      Arcade.Mesh.done(ball_id(), Arcade.Mesh.sphere([], 3, Arcade.Draw.hex(16743001), Arcade.Draw.hex(16774368))),
+      Arcade.Mesh.done(gem_id(), Arcade.Mesh.gem([], 0.2, 0.3, Arcade.Draw.hex(8319231))),
+      Arcade.Mesh.done(shade_id(), Arcade.Mesh.disc([], 1.0, Arcade.Draw.hex(16777215)))
     ]
   end
 
@@ -205,7 +205,7 @@ mod Tumble.Scene do
   fn view_proj(st : TumbleSight, at : Arcade.Vec2.Vec2, aspect : Float) : Mat4 needs () do
     let p = pose(st, at, aspect)
     let (f, r, u) = Arcade.Camera.basis(p)
-    Tumble.Mat4.mul(Tumble.Mat4.perspective(half_for(st, aspect), aspect, 0.5, 90.0), Tumble.Mat4.view(p.eye, f, r, u))
+    Arcade.Mat4.mul(Arcade.Mat4.perspective(half_for(st, aspect), aspect, 0.5, 90.0), Arcade.Mat4.view(p.eye, f, r, u))
   end
 
   -- ---- The frame ----
@@ -216,7 +216,7 @@ mod Tumble.Scene do
   """
   fn world(st : TumbleSight, ball : TumbleBall) : Mat4 needs () do
     let n = normalized(vec3(ball.tilt.x *. st.lean, ball.tilt.y *. st.lean, 1.0))
-    Tumble.Mat4.about(vec3(ball.at.x, ball.at.y, 0.0), Tumble.Mat4.stand_on(n))
+    Arcade.Mat4.about(vec3(ball.at.x, ball.at.y, 0.0), Arcade.Mat4.stand_on(n))
   end
 
   -- What changes from frame to frame besides the run: the floor point the
@@ -231,7 +231,7 @@ mod Tumble.Scene do
 
   doc """A pose at rest over a point."""
   fn pose_at(at : Arcade.Vec2.Vec2) : TumblePose needs () do
-    { follow: at, rolled: Tumble.Mat4.identity(), spun: Tumble.Mat4.identity(), clock: 0.0 }
+    { follow: at, rolled: Arcade.Mat4.identity(), spun: Arcade.Mat4.identity(), clock: 0.0 }
   end
 
   -- A gem's height above the floor: a triangle wave, 0.4 to 0.55 m, once
@@ -246,8 +246,8 @@ mod Tumble.Scene do
     match gs do
     Nil -> []
     Cons(g, rest) -> do
-      let m = Tumble.Mat4.mul(w, Tumble.Mat4.mul(Tumble.Mat4.translate(vec3(g.x, g.y, bob(p.clock, g))), p.spun))
-      Cons(Tumble.Cel.item(gem_id(), m, st.ink), gems(w, p, st, rest))
+      let m = Arcade.Mat4.mul(w, Arcade.Mat4.mul(Arcade.Mat4.translate(vec3(g.x, g.y, bob(p.clock, g))), p.spun))
+      Cons(Arcade.Cel.item(gem_id(), m, st.ink), gems(w, p, st, rest))
     end
     end
   end
@@ -260,9 +260,9 @@ mod Tumble.Scene do
     let b = run.ball
     let w = world(st, b)
     let ball =
-      Tumble.Mat4.mul(w, Tumble.Mat4.mul(Tumble.Mat4.translate(vec3(b.at.x, b.at.y, radius +. b.z)), Tumble.Mat4.mul(p.rolled, Tumble.Mat4.scale(radius))))
+      Arcade.Mat4.mul(w, Arcade.Mat4.mul(Arcade.Mat4.translate(vec3(b.at.x, b.at.y, radius +. b.z)), Arcade.Mat4.mul(p.rolled, Arcade.Mat4.scale(radius))))
     let shade =
-      Tumble.Mat4.mul(w, Tumble.Mat4.mul(Tumble.Mat4.translate(vec3(b.at.x, b.at.y, 0.012)), Tumble.Mat4.scale(radius *. 1.05)))
+      Arcade.Mat4.mul(w, Arcade.Mat4.mul(Arcade.Mat4.translate(vec3(b.at.x, b.at.y, 0.012)), Arcade.Mat4.scale(radius *. 1.05)))
     let ball_item = { mesh: ball_id(), model: ball, tint: Arcade.Draw.hex(16777215), alpha: 1.0, ink: st.ink, gloss: 0.9 }
     let shade_item = { mesh: shade_id(), model: shade, tint: Arcade.Draw.hex(1183258), alpha: 0.4, ink: 0.0, gloss: 0.0 }
     let rest =
@@ -272,7 +272,7 @@ mod Tumble.Scene do
       FateRolling -> [ball_item, shade_item]
       FateCleared -> [ball_item, shade_item]
       end
-    Cons(Tumble.Cel.item(board_id(), w, st.ink), List.append(gems(w, p, st, run.gems), rest))
+    Cons(Arcade.Cel.item(board_id(), w, st.ink), List.append(gems(w, p, st, run.gems), rest))
   end
 
   doc """A round's frame on a screen of this aspect."""
@@ -301,7 +301,7 @@ mod Tumble.Scene do
     let far = Arcade.Vec2.length(d)
     let rolled =
       if far > 0.0 do
-        Tumble.Mat4.squared(Tumble.Mat4.mul(Tumble.Mat4.turn(vec3(0.0 -. d.y /. far, d.x /. far, 0.0), far /. radius /. 2.0), p.rolled))
+        Arcade.Mat4.squared(Arcade.Mat4.mul(Arcade.Mat4.turn(vec3(0.0 -. d.y /. far, d.x /. far, 0.0), far /. radius /. 2.0), p.rolled))
       else
         p.rolled
       end
@@ -314,7 +314,7 @@ mod Tumble.Scene do
     {
       follow: follow,
       rolled: rolled,
-      spun: Tumble.Mat4.squared(Tumble.Mat4.mul(Tumble.Mat4.turn(vec3(0.0, 0.0, 1.0), dt *. 0.75), p.spun)),
+      spun: Arcade.Mat4.squared(Arcade.Mat4.mul(Arcade.Mat4.turn(vec3(0.0, 0.0, 1.0), dt *. 0.75), p.spun)),
       clock: p.clock +. dt
     }
   end

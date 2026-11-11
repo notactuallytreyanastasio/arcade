@@ -1,7 +1,7 @@
 mod Arcade.Web.Input do
 
   -- Input for a game's shell, backed by arcade_input.mjs (march copies it
-  -- beside the build): one pointer followed on a canvas, drag handles and
+  -- beside the build): one pointer followed on a canvas, the keyboard, drag handles and
   -- text fields in a DOM overlay, and a queue of taps (codes queued by DOM
   -- buttons or Enter in a field, drained once a frame). Platform calls only.
   needs IO.Foreign
@@ -10,6 +10,7 @@ mod Arcade.Web.Input do
     fn input_on_pointer(canvas : Js.Dom.Node, down : List((Float, Float, Float)) -> (), move : List((Float, Float, Float)) -> (), up : List((Float, Float, Float)) -> (), cancel : () -> ()) : Unit
     fn input_on_drag(root : Js.Dom.Node, down : (Float, Float) -> (), move : (Float, Float) -> (), up : (Float, Float) -> (), lost : () -> ()) : Unit
     fn input_on_fields(root : Js.Dom.Node, typed : String -> ()) : Unit
+    fn input_on_keys(heard : (String, Bool) -> ()) : Unit
     fn input_queue_tap(i : Int) : Unit
     fn input_drain_taps() : List(Int)
   end
@@ -33,6 +34,13 @@ mod Arcade.Web.Input do
   value; Enter in one marked data-enter queues that tap code."""
   fn on_fields(root : Js.Dom.Node, typed : String -> ()) : () do
     input_on_fields(root, typed)
+  end
+
+  doc """The keyboard: `heard` gets (code, down) for every key going down (once, not on
+  auto-repeat) or coming up, by KeyboardEvent.code, a 2-tuple. Keys held with ctrl,
+  meta or alt are left to the browser; the arrows and space do not scroll the page."""
+  fn on_keys(heard : (String, Bool) -> ()) : () do
+    input_on_keys(heard)
   end
 
   fn queue_tap(i : Int) : () do

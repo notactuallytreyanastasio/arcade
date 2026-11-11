@@ -26,8 +26,7 @@ test-js:
 
 # The browser build. march is called directly, as forge puts only lib/ and
 # the deps on the module path and the shell's modules are in shell/. The
-# glue (the engine's arcade_*.mjs, the shell's tumble_*.mjs) is copied beside
-# each build by march.
+# engine's glue (arcade_*.mjs) is copied beside each build by march.
 MARCH := $(HOME)/.march/bin/march
 WEB_LIB := lib:$(ARCADE_LIB):$(ARCADE_PHYSICS_LIB):shell
 PORT ?= 8238

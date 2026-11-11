@@ -4,7 +4,7 @@ mod Tumble.App do
   -- can send it, and `update`, which answers a message with the next model
   -- and a list of effects to carry out. Nothing here does anything: an
   -- effect is a description (play these cues, upload this mesh, buzz), and
-  -- the frame to draw is two more values, a Tumble.Cel frame for the 3D
+  -- the frame to draw is two more values, a Arcade.Cel frame for the 3D
   -- picture and Arcade.Draw ops for the overlay. The module is `cap pure`,
   -- so the compiler holds it to that; the browser shell is the only code in
   -- the game that needs a capability, and it decides nothing.
@@ -466,7 +466,7 @@ mod Tumble.App do
     let look = Tumble.Scene.look()
     [
       ("data-palette", String.join(List.map(Tumble.Scene.palette(), rgb), ",")),
-      ("data-tones", String.join(List.map(Tumble.Cel.tones(look), fn t -> int_to_string(float_round(t *. 1000.0))), ",")),
+      ("data-tones", String.join(List.map(Arcade.Cel.tones(look), fn t -> int_to_string(float_round(t *. 1000.0))), ",")),
       ("data-sky", rgb(look.sky)),
       ("data-ink", rgb(look.ink))
     ]

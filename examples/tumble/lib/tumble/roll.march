@@ -228,35 +228,11 @@ mod Tumble.Roll do
   end
 
   -- ---- Posts ----
-  doc """
-  A ball of radius r touching a post of radius pr at `post`: put back out
-  along the line of centres, and when it was closing, reflected keeping
-  `bounce` and kicked away at `kick` m/s. None when they do not touch.
-  """
-  fn off_post(p : Vec2, v : Vec2, r : Float, post : Vec2, pr : Float, bounce : Float, kick : Float) : Option((Vec2, Vec2)) needs () do
-    let d = sub(p, post)
-    let d2 = dot(d, d)
-    let reach = r +. pr
-    if d2 >= reach *. reach || d2 <= 0.0 do
-      None
-    else
-      do
-        let n = scale(d, 1.0 /. Math.sqrt(d2))
-        let out = add(post, scale(n, reach))
-        if dot(v, n) < 0.0 do
-          Some((out, add(Arcade.Physics.Kinematics.reflect(v, n, bounce), scale(n, kick))))
-        else
-          Some((out, v))
-        end
-      end
-    end
-  end
-
   pfn posts(c : TumbleCourt, ps : List(Vec2), p : Vec2, v : Vec2, hit : Bool) : (Vec2, Vec2, Bool) needs () do
     match ps do
     Nil -> (p, v, hit)
     Cons(post, rest) -> do
-      match off_post(p, v, radius(c), post, c.tune.post_radius, c.tune.post_bounce, c.tune.post_kick *. c.mods.kick) do
+      match Arcade.Physics.Collide.off_disc(p, v, radius(c), post, c.tune.post_radius, c.tune.post_bounce, c.tune.post_kick *. c.mods.kick) do
       Some((p1, v1)) -> posts(c, rest, p1, v1, true)
       None -> posts(c, rest, p, v, hit)
       end
@@ -265,54 +241,6 @@ mod Tumble.Roll do
   end
 
   -- ---- Rails ----
-  doc """
-  A ball of radius r overlapping the box lo-hi: put back out along the line
-  from the box's nearest point and reflected off that normal keeping
-  `bounce`. A centre already inside leaves by the nearest face. None when
-  they do not touch.
-  """
-  fn off_box(p : Vec2, v : Vec2, r : Float, lo : Vec2, hi : Vec2, bounce : Float) : Option((Vec2, Vec2)) needs () do
-    let q = vec2(Arcade.Num.clamp(p.x, lo.x, hi.x), Arcade.Num.clamp(p.y, lo.y, hi.y))
-    let d = sub(p, q)
-    let d2 = dot(d, d)
-    if d2 >= r *. r do
-      None
-    else
-      if d2 > 0.0 do
-        do
-          let n = scale(d, 1.0 /. Math.sqrt(d2))
-          Some((add(q, scale(n, r)), Arcade.Physics.Kinematics.reflect_approaching(v, n, bounce)))
-        end
-      else
-        Some(by_face(p, v, r, lo, hi, bounce))
-      end
-    end
-  end
-
-  pfn by_face(p : Vec2, v : Vec2, r : Float, lo : Vec2, hi : Vec2, bounce : Float) : (Vec2, Vec2) needs () do
-    let left = p.x -. lo.x
-    let right = hi.x -. p.x
-    let below = p.y -. lo.y
-    let above = hi.y -. p.y
-    let side = Arcade.Num.min_float(left, right)
-    let ends = Arcade.Num.min_float(below, above)
-    let (n, out) =
-      if side <= ends do
-        if left <= right do
-          (vec2(-1.0, 0.0), vec2(lo.x -. r, p.y))
-        else
-          (vec2(1.0, 0.0), vec2(hi.x +. r, p.y))
-        end
-      else
-        if below <= above do
-          (vec2(0.0, -1.0), vec2(p.x, lo.y -. r))
-        else
-          (vec2(0.0, 1.0), vec2(p.x, hi.y +. r))
-        end
-      end
-    (out, Arcade.Physics.Kinematics.reflect_approaching(v, n, bounce))
-  end
-
   -- The nine cells round the ball, each void one a box the ball bounces off.
   pfn rails(c : TumbleCourt, p : Vec2, v : Vec2) : (Vec2, Vec2, Bool) needs () do
     if c.mods.rails do
@@ -336,7 +264,7 @@ mod Tumble.Roll do
           do
             let lo = vec2(int_to_float(col), int_to_float(row))
             let hi = vec2(int_to_float(col) +. 1.0, int_to_float(row) +. 1.0)
-            match off_box(p, v, radius(c), lo, hi, c.tune.rail_bounce) do
+            match Arcade.Physics.Collide.off_box(p, v, radius(c), lo, hi, c.tune.rail_bounce) do
             Some((p1, v1)) -> rail_cells(c, at, i + 1, p1, v1, true)
             None -> rail_cells(c, at, i + 1, p, v, hit)
             end

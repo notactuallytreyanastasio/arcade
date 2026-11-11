@@ -6,8 +6,8 @@ mod TumbleShell do
   -- Tumble.App as a message, or carries out what Tumble.App answered.
   --
   --   messages  the frame's time, the window's size, the pointer, the keys
-  --             (TumbleKeys), the page being hidden
-  --   effects   audio commands to Arcade.Web.Audio, meshes to TumbleGl, a
+  --             (Arcade.Web.Input), the page being hidden
+  --   effects   audio commands to Arcade.Web.Audio, meshes to Arcade.Web.Gl, a
   --             buzz to the vibrator
   --   a frame   Tumble.App.overlay painted on the 2D canvas by the runtime,
   --             Tumble.App.picture drawn on the WebGL canvas under it
@@ -40,7 +40,7 @@ mod TumbleShell do
   fn effect(e : TumbleFx) : () do
     match e do
     FxAudio(cmds) -> TumbleAudio.route(cmds)
-    FxMeshes(ms) -> List.each(ms, TumbleGl.upload)
+    FxMeshes(ms) -> List.each(ms, Arcade.Web.Gl.upload)
     FxBuzz(ms) -> Arcade.Web.Glue.vibrate(ms)
     end
   end
@@ -79,7 +79,7 @@ mod TumbleShell do
   end
 
   fn listen(dispatch : TumbleMsg -> ()) : () do
-    TumbleKeys.listen(fn pair ->
+    Arcade.Web.Input.on_keys(fn pair ->
       match pair do
       (code, held_down) -> key(dispatch, code, held_down)
       end
@@ -88,7 +88,7 @@ mod TumbleShell do
 
   -- ---- The 3D picture ----
   fn draw(m : TumbleModel) : () do
-    TumbleGl.frame(m.view_w, m.view_h, Arcade.Web.Glue.device_pixel_ratio(), Tumble.App.picture(m))
+    Arcade.Web.Gl.frame(m.view_w, m.view_h, Arcade.Web.Glue.device_pixel_ratio(), Tumble.App.picture(m))
   end
 
   -- The runtime's overlay hook: draw, and send it no messages.
@@ -120,7 +120,7 @@ mod TumbleShell do
   end
 
   fn main(_f : Cap(IO.Foreign)) : () do
-    if TumbleGl.open("stage") do
+    if Arcade.Web.Gl.open("stage") do
       match Arcade.Web.Runtime.launch("hud", fn () -> hooks()) do
       Ok(_) -> ()
       Err(why) -> panic(why)

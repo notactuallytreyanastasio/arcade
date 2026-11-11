@@ -1,4 +1,4 @@
-mod Tumble.Mat4 do
+mod Arcade.Mat4 do
 
   -- 4x4 matrices for placing and projecting 3D things, column-major as WebGL
   -- takes them: field mCR is column C, row R, and `floats` lists them column

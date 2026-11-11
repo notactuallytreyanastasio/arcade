@@ -4,6 +4,13 @@ All notable changes to `arcade-physics` are recorded here. Versions follow
 semver; `forge publish --old-source` checks the bump against the public API
 surface.
 
+## Unreleased
+
+- `Arcade.Physics.Collide`: `off_box` and `off_disc`, a moving disc against
+  a fixed box or disc. `off_box` is the push-out `examples/putt` had as
+  `Putt.Roll.block`, operation for operation: putt now calls it and its
+  pinned digests did not move.
+
 ## 0.1.0
 
 The first version, split out of the engine core so a game that needs no
