@@ -4,7 +4,7 @@ All notable changes to `arcade_testkit` are recorded here. Versions follow
 semver; `forge publish --old-source` checks the bump against the public API
 surface.
 
-## 0.1.0 (unreleased)
+## 0.1.0
 
 The first version. Depends on `arcade` 0.1.0. A dev-dep: it holds IO and
 panics, so it belongs on test paths only.
@@ -17,4 +17,4 @@ panics, so it belongs on test paths only.
   tolerance on JS).
 - `Arcade.Test.Digest`: a 32-bit FNV-style digest of a run, so two targets
   can be compared by one number.
-- No license is declared yet; `forge publish` warns until one is.
+- MIT licensed.

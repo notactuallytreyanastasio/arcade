@@ -3,7 +3,7 @@
 All notable changes to `arcade` are recorded here. Versions follow semver;
 `forge publish --old-source` checks the bump against the public API surface.
 
-## 0.1.0 (unreleased)
+## 0.1.0
 
 The first version, extracted from a browser game whose Swift goldens it still
 reproduces bit for bit.
@@ -16,4 +16,4 @@ reproduces bit for bit.
 - Web shell (JS target only, `needs IO.Foreign`): `Arcade.Web.Runtime`,
   `Glue`, `Cell`, `Input`, `Canvas2d`, `Paint`, `Audio`, `SynthHost`,
   `SynthWorklet`, and the `arcade_*.mjs` glue beside them.
-- No license is declared yet; `forge publish` warns until one is.
+- MIT licensed.

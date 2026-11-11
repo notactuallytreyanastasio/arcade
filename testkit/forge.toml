@@ -4,9 +4,8 @@ version = "0.1.0"
 type = "lib"
 description = "Arcade test kit: the suite harness, golden-table readers and digests, shared by native and JS runners. A dev-dep only."
 author = "Bobby Grayson"
-# No license has been chosen for this repository yet. `forge publish` warns
-# while this is empty; set it before a real publish.
-license = ""
+license = "MIT"
+repository = "https://github.com/notactuallytreyanastasio/arcade"
 
 [deps]
 # The registry constraint a published copy declares, and the engine tree's

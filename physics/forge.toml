@@ -4,9 +4,8 @@ version = "0.1.0"
 type = "lib"
 description = "Arcade physics: fixed-step simulation, kinematics, the libm replay seam and gesture measurement. Pure."
 author = "Bobby Grayson"
-# No license has been chosen for this repository yet. `forge publish` warns
-# while this is empty; set it before a real publish.
-license = ""
+license = "MIT"
+repository = "https://github.com/notactuallytreyanastasio/arcade"
 
 [deps]
 # The registry constraint a published copy declares, and the engine tree's

@@ -81,8 +81,8 @@ worklet (processor `putt-synth`), or on the main thread where worklets are
 missing.
 
 `make playtest` builds `dist/`, serves it on `PORT` and flicks once in
-headless Chrome (puppeteer-core from `PLAYTEST_MODULES`, by default the
-host repository's `tools/playtest`). It reads the marks the shell sets on
+headless Chrome. `PLAYTEST_MODULES` must name a directory whose
+`node_modules` holds puppeteer-core; there is no default. It reads the marks the shell sets on
 `<html>` (`data-phase`, `data-hole`, `data-strokes`, `data-rolling`,
 `data-putts`) and checks the first tee, the green's colour at the canvas's
 centre, the flick becoming a putt that rolls and rests with one stroke on

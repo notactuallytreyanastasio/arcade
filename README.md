@@ -213,8 +213,8 @@ engine has no generator of its own to depend on.
 The example game: `make -C examples/putt check test web playtest`.
 
 Never run a bare `forge format`: on this toolchain it can delete the body of a
-`match do` or a multi-statement lambda. Use the host repository's guarded
-format script.
+`match do` or a multi-statement lambda. Use `make format` (`scripts/format.sh`),
+which formats one file at a time and refuses a result that lost code.
 
 ## Publishing
 
@@ -230,7 +230,7 @@ scripts/publish-check.sh     # stage to a temp dir, forge publish --dry-run each
                              # then forge check + lint + audit each standalone
 ```
 
-A staged package ships `forge.toml`, `forge.caps.lock`, `README.md`,
+A staged package ships `forge.toml`, `forge.caps.lock`, `LICENSE`, `README.md`,
 `CHANGELOG.md`, `lib/` and (core and test kit) `.march-lint.toml`. In the tree,
 arcade_physics and arcade_testkit name the core as
 `arcade = { version = "0.1.0", path = ".." }`; forge 0.7.0 treats that as a
@@ -244,6 +244,5 @@ the core's. `forge.caps.lock` is each package's capability baseline
 
 `forge publish --dry-run` checks the manifest and, with `--old-source`, the
 semver bump; it does not build the tarball or check the deps, which is why
-`publish-check.sh` builds each staged package on its own. No license has been
-chosen yet: `license` is empty in all three manifests and the dry run warns
-until it is set.
+`publish-check.sh` builds each staged package on its own. All three packages
+are MIT licensed (`LICENSE` ships in each).

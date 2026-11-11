@@ -27,9 +27,9 @@ test-js:
 MARCH := $(HOME)/.march/bin/march
 WEB_LIB := lib:$(ARCADE_LIB):$(ARCADE_PHYSICS_LIB):shell
 PORT ?= 8237
-# Where puppeteer-core is installed (its node_modules' parent); the default is
-# the host repository's playtest tools. Override with PLAYTEST_MODULES=...
-PLAYTEST_MODULES ?= $(ARCADE)/../tools/playtest
+# Where puppeteer-core is installed (its node_modules' parent). There is no
+# default: `make playtest PLAYTEST_MODULES=/path/to/dir`.
+PLAYTEST_MODULES ?=
 
 # dist/: putt.mjs (shell/putt_shell.march), the audio worklet's own build
 # putt_synth_worklet.mjs (shell/putt_worklet.march), March's runtime
@@ -45,6 +45,7 @@ serve: web
 	node scripts/serve.mjs dist $(PORT)
 
 playtest: web
+	@test -n "$(PLAYTEST_MODULES)" || { echo "playtest: set PLAYTEST_MODULES to a directory whose node_modules has puppeteer-core"; exit 2; }
 	node test/web/playtest.mjs dist $(PORT) $(PLAYTEST_MODULES)
 
 clean:

@@ -4,7 +4,7 @@ All notable changes to `arcade_physics` are recorded here. Versions follow
 semver; `forge publish --old-source` checks the bump against the public API
 surface.
 
-## 0.1.0 (unreleased)
+## 0.1.0
 
 The first version, split out of the engine core so a game that needs no
 simulation does not depend on one. Depends on `arcade` 0.1.0.
@@ -17,4 +17,4 @@ simulation does not depend on one. Depends on `arcade` 0.1.0.
   where recorded sines replace libm for bit-exact replays across targets.
 - `Arcade.Physics.Gesture`: `TrackPoint`, `GestureLimits`, `measure` to
   `GestureMetrics`.
-- No license is declared yet; `forge publish` warns until one is.
+- MIT licensed.

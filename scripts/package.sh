@@ -82,11 +82,11 @@ to_registry() {
 }
 
 stage arcade "$root" \
-  forge.toml forge.caps.lock README.md CHANGELOG.md .march-lint.toml .editorconfig lib
+  forge.toml forge.caps.lock LICENSE README.md CHANGELOG.md .march-lint.toml .editorconfig lib
 stage arcade_physics "$root/physics" \
-  forge.toml forge.caps.lock README.md CHANGELOG.md lib
+  forge.toml forge.caps.lock LICENSE README.md CHANGELOG.md lib
 stage arcade_testkit "$root/testkit" \
-  forge.toml forge.caps.lock README.md CHANGELOG.md .march-lint.toml lib
+  forge.toml forge.caps.lock LICENSE README.md CHANGELOG.md .march-lint.toml lib
 to_registry arcade_physics
 to_registry arcade_testkit
 

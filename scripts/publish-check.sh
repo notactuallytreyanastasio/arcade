@@ -8,9 +8,8 @@
 #      arcade_testkit points at the staged core (`path = "../arcade"`) instead
 #      of the registry: forge check, forge lint and forge audit. This is the
 #      standalone build: nothing of the engine tree or any game is reachable.
-# Fails on any warning, as scripts/check.sh does, with one exception that is
-# printed rather than hidden: no license has been chosen yet, and the dry run
-# warns about the empty `license` field until one is.
+# Fails on any warning, as scripts/check.sh does; an empty `license` field is
+# one of them.
 #   scripts/publish-check.sh
 set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -18,7 +17,6 @@ export PATH="$HOME/.march/bin:$PATH"
 work=$(mktemp -d "${TMPDIR:-/tmp}/arcade-publish-check.XXXXXX") || exit 2
 trap 'rm -rf "$work"' EXIT
 fail=0
-license_note=""
 
 "$root/scripts/package.sh" "$work/publish" > "$work/package.log" 2>&1 || {
   cat "$work/package.log"
@@ -32,11 +30,7 @@ scan() {
   out=$("$@" 2>&1)
   rc=$?
   warnings=$(printf '%s\n' "$out" | grep -iE 'warning' \
-    | grep -vE 'overriding the module target triple|warnings? generated' \
-    | grep -vF 'warning: no `license` field in forge.toml')
-  if printf '%s\n' "$out" | grep -qF 'warning: no `license` field in forge.toml'; then
-    license_note="$license_note $label"
-  fi
+    | grep -vE 'overriding the module target triple|warnings? generated')
   if [ "$rc" -ne 0 ] || [ -n "$warnings" ]; then
     echo "--- publish-check: $label (exit $rc)"
     printf '%s\n' "$out"
@@ -74,8 +68,5 @@ for p in $pkgs; do
   scan "forge audit ($p, staged)" sh -c "cd '$dir' && forge audit"
 done
 
-if [ -n "$license_note" ]; then
-  echo "publish-check: note: no license chosen yet (empty \`license\` in forge.toml):$license_note"
-fi
 [ "$fail" -eq 0 ] && echo "publish-check: arcade, arcade_physics, arcade_testkit stage, build standalone and pass forge publish --dry-run"
 exit "$fail"
